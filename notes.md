@@ -31,6 +31,12 @@
     - [Tiresias](#tiresias)
     - [DRF](#drf)
     - [FairRide](#fairride)
+  - [Memory](#memory)
+    - [Address Translation and Virtual Memory](#address-translation-and-virtual-memory)
+      - [Segmentation](#segmentation)
+      - [Paging](#paging)
+    - [Caching](#caching)
+    - [Demand Paging](#demand-paging)
 
 
 # Operating Systems
@@ -53,17 +59,40 @@
 
 简单的保护机制：Base and Bound
 
-- Base: 起始地址
-- Bound: 边界
+- Base：进程在物理内存中的起始地址
+- Bound：进程虚拟地址的最大范围
 
-两种实现：
+Load-time relocation：
 
-- 加载时计算物理地址（加载的实现比较复杂），运行时检查边界
-- 运行时计算物理地址（性能 overhead，不过 B&B 很简单）
+- 加载时由加载器直接将程序中的虚拟地址修改为物理地址
+  - 若基址为 `0x1000`，则程序中的虚拟地址 `0x100` 被改写为 `0x1100`
+- 特点：
+  - 静态绑定：加载时完成地址转换，运行时基址不变
+  - 灵活性差：一旦加载无法移动
+  - 无需硬件支持
 
-B&B 的优点：简单、进程间隔离、进程和 OS 隔离
+Run-time relocation：
 
-B&B 的缺点：Internal fragmentation（每个进程 heap 和 stack 之间的内存浪费）、External fragmentation（进程之间）
+- 加载时保留虚拟地址，运行时通过基址寄存器动态转换
+- 特点
+  - 动态绑定：运行时完成地址转换，基址可在进程切换时动态调整
+  - 灵活性高：进程可加载到任意空闲内存区域，减少碎片
+  - 需要硬件支持：基址寄存器和地址转换电路
+
+B&B 的优点：
+
+- 简单
+- 进程间隔离、进程和 OS 隔离
+
+B&B 的缺点：
+
+- 碎片化
+  - 内部碎片化：每个进程堆和栈之间的内存浪费
+  - 外部碎片化：进程之间的内存浪费
+- 不支持分段（稀疏的地址空间）
+  - 地址空间是单一的连续块，不支持代码、数据、堆、栈分段
+- 难以共享内存
+- 进程地址空间大小受限，无法扩展
 
 从用户态切换到内核态：
 
@@ -1489,15 +1518,15 @@ Starvation：线程在一段不定时间内没有进展。
 
 ### Choosing the Right Scheduler
 
-| I Care About | Then Choose: |
-| :----------: | :----------: |
-| CPU throughput | FCFS |
-| Avg. Completion Time | SRTF Approximation |
-| I/O Throughput | SRTF Approximation |
-| Fairness (CPU Time) | Linux CFS |
-| Fairness (Wait Time to Get CPU) | Round Robin |
-| Meeting Deadlines | EDF |
-| Favoring Important Tasks | Priority |
+|          I Care About           |    Then Choose:    |
+| :-----------------------------: | :----------------: |
+|         CPU throughput          |        FCFS        |
+|      Avg. Completion Time       | SRTF Approximation |
+|         I/O Throughput          | SRTF Approximation |
+|       Fairness (CPU Time)       |     Linux CFS      |
+| Fairness (Wait Time to Get CPU) |    Round Robin     |
+|        Meeting Deadlines        |        EDF         |
+|    Favoring Important Tasks     |      Priority      |
 
 解释：
 
@@ -1838,3 +1867,291 @@ FairRide:
   - 以 $p(n_j) = \frac{1}{n_j} + 1$ 的概率阻塞用户访问，其中 $n_j$ 是缓存文件 $j$ 的用户数
     - 例如 $p(1) = 0.5$
 - 作弊总会得到更坏的结果
+
+## Memory
+
+### Address Translation and Virtual Memory
+
+不同的进程/线程共享相同的硬件资源（CPU、内存、硬盘、I/O 设备），因此，我们需要虚拟化。
+
+进程虚拟地址空间：可访问地址及其状态的集合。
+
+- 当读写某个地址时，可能发生
+  - 正常内存读写
+  - I/O 操作（I/O mapped memory）
+  - 程序中止（segmentation fault）
+  - 与其他程序的通信
+
+Memory multiplexing：
+
+- Protection：
+  - 禁止访问其他进程的私有内存
+- Translation：
+  - 处理器访问虚拟地址
+  - 避免重叠
+  - 为程序提供统一的内存视图
+- Controlled overlap：
+  - 不同线程的私有状态不能占据同一块物理内存
+  - 需要重叠时可以实现重叠（通信）
+
+另一种视角：介入进程行为
+
+- OS 介入进程的 I/O 操作：所有 I/O 操作通过系统调用实现
+- OS 介入进程的 CPU 使用：中断使 OS 可以抢占线程
+- OS 介入进程的内存访问：
+  - 每次内存访问都经过 OS 太慢了
+  - 地址翻译：硬件支持的常规访问介入
+  - Page fault：非常规访问 trap 到 OS 处理
+
+#### Segmentation
+
+Uniprogramming：
+
+- 无翻译
+- 无保护
+- 同一时刻仅有一个应用程序运行，独占 CPU 和所有内存
+
+Primitive multiprogramming：
+
+- 无翻译
+- 无保护
+- Loader/Linker 调整程序内各指令包含的地址（load、store、jump）
+- 一个程序的 bug 可能影响其他程序，甚至 OS
+
+Multiprogramming with protection: Base and Bound
+
+带 segmentation 的 base and bound：
+
+- 虚拟地址划分为两部分：segment 号和 offset
+- 处理器内部存一个 segment map
+  - 将 segment 号映射到一个 (base, limit, valid) 三元组
+- 访问虚拟地址时，处理器在 segment map 中查找虚拟地址对应的 segment 号
+  - 检查是否有效（valid）、是否越界（limit）
+  - 如果有效且没有越界，则将 base 加上 offset，得到物理地址
+
+Segmentation 的若干观察：
+
+- 每条内存访问指令都触发地址翻译
+- Segmentation 高效地支持了稀疏的虚拟地址空间
+- 栈触发 fault 时，系统会自动扩展栈空间
+- Segment map 需要保护模式
+  - 代码段应只读
+- segment map 存放在 CPU，上下文切换时无需保存和恢复
+- 当 segment 无法装进内存时，会 swap out 到硬盘
+- 问题
+  - 物理内存需要容纳变长的块
+  - 为了装得下所有段，可能需要多次移动进程的地址空间
+  - Swapping to disk 的粒度太大
+  - 碎片化：
+    - 外部碎片化：已分配的块之间的空隙
+    - 内部碎片化：已分配的块中未使用的空间
+
+#### Paging
+
+Paging：
+
+- 每个进程拥有一个页表，存放在物理内存中
+- 页表项：(Physical Page Number, permission flags)
+- 虚拟地址映射：
+  - 虚拟地址 = (Virtual Page Number, Virtual Page Offset)
+  - 物理地址 = (Physical Page Number, Physical Page Offset)
+  - VPO = PPO
+  - 页表中 VPN 索引的页表项存放对应的 PPN 及权限位
+- 进程之间的共享页
+  - 共享页的 PPN 出现在所有共享该页的进程的页表中
+  - 每个进程地址空间的内核区域是共享的
+    - 进程在用户模式无法访问内核区域，但在用户 -> 内核切换时，内核既可以访问内核区域，也可以访问用户区域
+  - 不同进程运行同一份代码时，代码段是共享的（只执行）
+  - 用户级别的系统库（只执行）
+  - 共享内存段（shared memory segment）
+
+页表讨论：
+
+- 上下文切换时，页表指针和页表界限需要保存和恢复
+- 保护是如何实现的？
+  - Per process 的地址翻译
+  - 双模式
+  - 进程不能修改自己的页表
+- 优点：
+  - 简单的内存分配
+  - 容易实现共享
+- 缺点：
+  - 单级页表，页表项太多了（且大部分是空的），存不下
+
+两级页表：
+
+- 单级页表中 20 位的 VPN 进一步划分为 10 位的 VPN1 和 VPN2
+- 二级页表基址存放在 PageTablePtr 寄存器（CR3）
+- Page Table Entry（PTE）存放下一级页表的基址或 PPN，以及标志位（valid, read-only, read-write, write-only, ...）
+- 有效位为零：
+  - Segfault
+  - 缺页（未缓存到内存）
+
+Demand paging：
+
+- 内存中只存放活跃的页，其他页放在硬盘上（PTE 有效位置零）
+
+Copy-on-write：
+
+- Unix fork 复制父进程的页表，并将两份页表的所有 PTE 都标记为只读
+- 写操作触发缺页异常，OS 复制对应的页
+
+Zero-fill-on-demand：
+
+- 新的数据页应当被清零（be zeroed），防止敏感信息泄露
+- 将 PTE 标记为无效，使用时触发缺页异常，OS 清零对应的页
+
+内存共享：
+
+- 两个进程的二级页表的 PTE 指向同一个物理页（共享一页物理内存）
+- 两个进程的一级页表的 PTE 指向同一个二级页表（共享一大块物理内存）
+
+多级翻译：段 + 页
+
+- 低级：页表
+- 高级：段表
+- VPN1 是段号，指向一个 (base, limit, valid) 三元组，这个三元组指向一个二级页表
+- VPN2 指向二级页表中的 PTE
+- 上下文切换时，最高级段寄存器、最高级页表基址需要保存和恢复
+
+x86-64：四级页表
+
+- 48 位虚拟地址：(9, 9, 9, 9, 12)
+- 一页 4 KB
+- 每个 PTE 占 8 字节，每个页表有 512 个 PTE => 每个页表占 4 KB，刚好 fit 一个页
+
+IA64：六级页表
+
+- 64 位虚拟地址：(7, 9, 9, 9, 9, 9, 12)
+- 很慢
+- 太多 almost-empty 页表
+
+多级页表分析：
+
+- 优点：
+  - 按需创建 PTE（单级页表必须创建所有 PTE），节约内存，对稀疏地址空间友好
+  - 容易的内存分配
+  - 容易的共享（段级别和页级别）
+- 缺点
+  - 每页都需要一个指针
+  - 页表需要是连续的（10b-10b-12b 地址组织使得每个页表都在同一页，解决了此问题）
+  - 查表的时间开销（$k$ 级查表需要 $k$ 次内存访问）
+
+Dual-Mode 操作：
+
+- 进程不能修改自己的页表
+  - 否则它就能访问整个物理内存了
+- 硬件提供至少两个模式
+  - 用户模式：进程只能访问自己的页表
+  - 内核模式：进程可以访问所有页表
+  - 通过设置仅内核模式可见的控制寄存器可以切换模式
+  - 内核可以切换到用户模式，用户程序必须调用特殊异常来切换到内核模式
+
+Inverted Page Table:
+
+- 传统多级页表，每个页表必须存放所有的 PTE，浪费内存空间
+- 倒置页表通过一个全局的 hash 表，将 (PID, VPN) 映射到 PPN
+- 倒置页表的大小和虚拟地址空间无关，只和物理内存大小有关（对于 64 位机器很有吸引力，因为 64 位机器前者远大于后者）
+- 用硬件实现 hash chain，比较复杂
+- 缓存局部性不好
+
+地址翻译比较
+
+|                       |                        优势                        |                           劣势                           |
+| :-------------------: | :------------------------------------------------: | :------------------------------------------------------: |
+|  Simple Segmentation  |          快速的上下文切换（CPU 存储段表）          |                     内部/外部碎片化                      |
+| Paging (Single-Level) |          无外部碎片化、快速简单的内存分配          | 过大的页表（接近虚拟内存大小，大部分是空的）、内部碎片化 |
+|  Paged Segmentation   | 页表大小接近虚拟内存中页的数量，快速简单的内存分配 |                  页访问需要多次内存访问                  |
+|  Multi-Level Paging   | 页表大小接近虚拟内存中页的数量，快速简单的内存分配 |                  页访问需要多次内存访问                  |
+|  Inverted Page Table  |           页表大小接近物理内存中页的数量           |             复杂的哈希实现，页表缓存局部性差             |
+
+### Caching
+
+处理器用虚拟地址向 MMU 发出请求，MMU 在 TLB 中找到对应物理地址回应给 CPU（或触发异常）。 
+
+衡量缓存性能的指标：
+
+- 平均访问时间：$Average Access Time = Hit Rate \cdot Hit Time + Miss Rate \cdot Miss Time$
+
+如果没有 cache，每次实际 DRAM 访问需要 页表级数 + 1 次 DRAM 访问，开销极大，且如果页表在硬盘中，还需要 I/O。
+
+缓存不命中的原因
+
+- Compulsory：冷启动
+- Capacity：缓存不够大
+- Conflict：多个内存位置被映射到同一个缓存位置
+  - 解决方法：增大缓存、提高 associativity
+- Coherence：其他进程（I/O）更新了内存
+
+Cache 回顾：
+
+- 地址分为 (Cache Tag, Cache Index, Byte Offset)
+- 直接映射：
+  - 每组只有一行
+- N-way set associative：
+  - 每组有 N 行
+  - Cache Index 决定组号，比较每行的 Cache Tag 确定对应行（或确定 Cache Miss） 
+- Fully associative：
+  - Cache Index 不存在，所有行都可以存放任何数据
+  - 需要比较所有行的 Cache Tag 确定对应行（或确定 Cache Miss）
+- 缓存替换策略：
+  - LRU：Least Recently Used
+  - Random：随机选择一行替换
+  - 直接映射不存在非平凡替换策略，因为每个组只有一行
+- 写入策略：
+  - Write-through：每次写入都更新下层存储器（DRAM）和 cache
+    - 读不命中不会触发写回
+    - 写延迟高
+    - 总线带宽压力大
+  - Write-back：只更新 cache，直到 cache 被替换时才更新 DRAM
+    - 频繁的写场景下性能更好
+    - 复杂
+
+物理索引 Cache vs 虚拟索引 Cache：
+
+- 物理索引 Cache：
+  - CPU 通过虚拟地址访问 TLB，TLB 翻译得到物理地址访问 Cache
+  - 页表中存放物理地址
+  - 更常见
+  - 好处：
+    - 每个数据块在 cache 中只存一份
+    - 上下文切换无需 flush cache
+  - 坏处：
+    - TLB 处于内存访问的关键路径‘
+- 虚拟索引 Cache：
+  - CPU 通过虚拟地址访问 Cache 和 TLB（Cache 访问和内存访问并行）
+  - 页表中存放虚拟地址
+  - 坏处：
+    - 每个数据块在 cache 中存多份
+
+TLB 组织：
+
+- Miss time 极高（多级页表遍历）
+- 如果用低位作为 TLB 的组索引，则 code、data、stack 段可能会映射到同一组
+  - 至少需要 3 路组相联
+- 如果用高位作为 TLB 的组索引，则小程序可能只会用到一组
+- TLB 一般很小，只包含 128-512 个条目（现在更大）
+- 小 TLB 一般全相联
+- 更大的则在全相联 TLB 之前放一个直接映射 TLB（4-16 个条目），称为 TLB slice
+
+虚拟地址：(VPN, VPO) => (VPN, cache index, byte offset)
+
+- VPO 恰好又被划分为 cache index 和 byte offset，且 VPO = PPO
+- 从而 TLB 查找（使用 VPN）和 cache 查找的组索引过程（使用 PPO）可以**并行**进行：
+  - TLB 使用 VPN 查找对应的 PPN，同时 cache 使用 PPO 查找对应的 cache set
+  - TLB 取出 PPN，cache 根据 PPN 比对找到对应的 cache line
+- VPO 为 12 位，这限制了 cache 的大小，更大的 cache 难以完全并行化，需要其他设计
+- 虚拟地址索引的 cache 能更完全地并行
+
+上下文切换时
+
+- 因为虚拟地址空间也被切换了，TLB 条目都无效了
+- 选项：
+  - 无效化 TLB 条目：简单但开销大（两个进程来回切换）
+  - 在 TLB 中包含 PID：需要硬件支持
+- 如果页表改变了，也需要无效化 TLB 条目
+  - 比如页被 swap out
+  - TLB Consistency
+- 虚拟索引的 cache，还需要 flush
+
+### Demand Paging
