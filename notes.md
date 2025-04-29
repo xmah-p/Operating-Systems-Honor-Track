@@ -37,12 +37,12 @@
       - [Paging](#paging)
     - [Caching](#caching)
     - [Demand Paging](#demand-paging)
+    - [Replacement Policy](#replacement-policy)
 
 
 # Operating Systems
 
 操作系统：为应用程序提供硬件资源的 special layer
-
 - 为复杂硬件设备提供一层方便的抽象
 - 对共享资源的访问提供保护
 - Security and authentication
@@ -52,18 +52,17 @@
 
 ## Four Fundamental OS Concepts
 
+Four Fundamental OS Concepts:  
 - Thread
 - Address space (with translation)
 - Process
 - Dual mode operation / Protection
 
-简单的保护机制：Base and Bound
-
+简单的保护机制：Base and Bound  
 - Base：进程在物理内存中的起始地址
 - Bound：进程虚拟地址的最大范围
 
-Load-time relocation：
-
+Load-time relocation：  
 - 加载时由加载器直接将程序中的虚拟地址修改为物理地址
   - 若基址为 `0x1000`，则程序中的虚拟地址 `0x100` 被改写为 `0x1100`
 - 特点：
@@ -71,21 +70,18 @@ Load-time relocation：
   - 灵活性差：一旦加载无法移动
   - 无需硬件支持
 
-Run-time relocation：
-
+Run-time relocation：  
 - 加载时保留虚拟地址，运行时通过基址寄存器动态转换
 - 特点
   - 动态绑定：运行时完成地址转换，基址可在进程切换时动态调整
   - 灵活性高：进程可加载到任意空闲内存区域，减少碎片
   - 需要硬件支持：基址寄存器和地址转换电路
 
-B&B 的优点：
-
+B&B 的优点：  
 - 简单
 - 进程间隔离、进程和 OS 隔离
 
-B&B 的缺点：
-
+B&B 的缺点：  
 - 碎片化
   - 内部碎片化：每个进程堆和栈之间的内存浪费
   - 外部碎片化：进程之间的内存浪费
@@ -94,8 +90,7 @@ B&B 的缺点：
 - 难以共享内存
 - 进程地址空间大小受限，无法扩展
 
-从用户态切换到内核态：
-
+从用户态切换到内核态：  
 - 系统调用
 - 外部中断
 - 内部中断
@@ -106,8 +101,7 @@ B&B 的缺点：
 
 ### Threads
 
-Motivation: Multiple Thing At Once (MTAO)
-
+Motivation: Multiple Thing At Once (MTAO)  
 - Multiprocessing: 多 CPU
 - Multiprogramming: 多进程
 - Multithreading: 多线程
@@ -143,8 +137,7 @@ int pthread_join(pthread_t tid, void** thread_return);
 
 `pthread_join` 会阻塞，直到线程 `tid` 终止。线程例程的返回值被存放在 `*thread_return` 中。此后，线程 `tid` 的资源被回收。
 
-线程状态：
-
+线程状态：  
 - 所有同地址空间的线程共享的
   - 全局变量、堆
   - I/O 状态（文件描述符、网络连接）
@@ -178,27 +171,23 @@ void* thread_fn(void* arg) {
 }
 ```
 
-信号量：`P` 和 `V`
-
+信号量：`P` 和 `V`  
 - 可以用于实现 mutual exclusion
 - 也可以用于 threads 之间的 signaling（`join` 为 `P`，`exit` 为 `V`）
 
-多进程编程：`fork` 和 `exec`
-
+多进程编程：`fork` 和 `exec`  
 - 为什么线程 API 只有 `pthread_create`，进程却有 `fork` 和 `exec`？
   - 可以只 `fork` 不 `exec`，从而将父子进程的代码都放在同一个可执行文件
   - 便于控制子进程的状态（在 `exec` 前设定子进程状态）
 
-线程和进程的选择：
-
+线程和进程的选择：  
 - 线程性能更强：上下文切换开销小、内存占用小、创建销毁/开销小
 - 进程保护性强：互相隔离且独立的地址空间
 - 线程间共享数据和通信更方便
 
 ### Files and I/O
 
-Unix/POSIX: 一切皆“文件”
-
+Unix/POSIX: 一切皆“文件”  
 - 磁盘上的文件
 - 设备 (terminals, printers, etc.)
 - 网络 sockets
@@ -206,14 +195,12 @@ Unix/POSIX: 一切皆“文件”
 
 文件系统的抽象:
 
-文件:
-
+文件:  
 - Named collection of data
 - 字节序列
 - Metadata
 
-目录:
-
+目录:  
 - 包含文件和目录
 - 路径唯一确定一个文件或目录（整个文件系统内可以有重名文件，只要它们的路径不一样）
 
@@ -263,8 +250,7 @@ if (input == NULL) {
 
 #### Low-level File API: File Descriptors
 
-Unix I/O 设计思想：
-
+Unix I/O 设计思想：  
 - 一切皆文件
 - Open before use: 访问控制
 - 面向字节
@@ -328,8 +314,7 @@ ssize_t read(int fd, void* buf, size_t count) {
 }
 ```
 
-`FILE*` 包括：
-
+`FILE*` 包括：  
 - 文件描述符
 - 缓冲区
 - 锁
@@ -349,8 +334,7 @@ fread(&x, sizeof(char), 1, f2);
 
 使用 high-level API 时需要注意缓冲区 flush 的问题，但 low-level API 不需要（`write` 系统调用会直接写入文件描述符）。
 
-Buffer in userspace: 
-
+Buffer in userspace:   
 - 系统调用开销很大：byte by byte 的读写，吞吐量仅为 10 MB/s，但 `fgetc` 可以匹配 SSD 的速度
 - 系统调用功能简单
   - 没有“读直到换行”
@@ -359,17 +343,14 @@ Buffer in userspace:
 
 `open` 系统调用返回一个 file descriptor（`int`），并在内核创建一个 open file description，其中包含文件在磁盘上的位置、当前文件位置等。
 
-`fork` 时，子进程会继承父进程的 file descriptor 和 open file description（后者被 aliased, 即共享, 并不创建新的 open file description）。当所有进程的 file descriptor 都被 `close` 时，open file description 才会被释放。
-
+`fork` 时，子进程会继承父进程的 file descriptor 和 open file description（后者被 aliased, 即共享, 并不创建新的 open file description）。当所有进程的 file descriptor 都被 `close` 时，open file description 才会被释放。  
 - 文件位置也会共享
 - 但如果子进程调用 `open`，则会创建新的 open file description，文件位置不会和父进程共享。
 
-这便于进程间的资源共享：
-
+这便于进程间的资源共享：  
 - 一切皆文件，这使得文件、网络连接、终端、管道等都可以在父子进程间共享
 
-重定向：`dup` 和 `dup2`
-
+重定向：`dup` 和 `dup2`  
 - 创建一个新的 file descriptor，指向**同一个** open file description
 
 #### Pitfalls with OS Abstractions
@@ -397,8 +378,7 @@ read(fd, y, 10); // assumes that this returns data starting at offset 10
 
 进程间通信：如果用文件，性能会太差。
 
-Unix Pipe: **存储在内存中的固定大小队列**
-
+Unix Pipe: **存储在内存中的固定大小队列**  
 - 对单向队列的抽象
 - 本地 IPC
 - 文件描述符通过继承获得
@@ -452,23 +432,19 @@ Pipe 是单向的，父子进程必须关闭不用的文件描述符（**否则�
 
 #### Socket
 
-沟通需要协议：
-
+沟通需要协议：  
 - Syntax：信息的组织结构
 - Semantics：信息的意义 
 
-客户端-服务器通信：
-
+客户端-服务器通信：  
 - 服务器总是开机，处理来自多个客户端的请求
 - 客户端有时开机，有时关机
 
-（TCP）网络连接：**两个（不同机器的）进程间的双向字节流**。
-
+（TCP）网络连接：**两个（不同机器的）进程间的双向字节流**。  
 - 包括一个从 Alice 到 Bob 的队列和一个从 Bob 到 Alice 的队列。
 - `write` 向输出队列写入数据，`read` 从输入队列读取数据。
 
-Socket：对于网络连接的一个 endpoint 的抽象，就像一个文件描述符。
-
+Socket：对于网络连接的一个 endpoint 的抽象，就像一个文件描述符。  
 - 对双向队列的抽象
 - 远程 IPC
 - 文件描述符通过 `socket`、`bind`、`listen`、`connect`、`accept` 获得
@@ -499,15 +475,13 @@ void server(int sockfd) {
 }
 ```
 
-以上代码预设了：
-
+以上代码预设了：  
 - Reliable: 没有数据丢失
 - In-order: 数据按顺序到达
 
 `read` 预设已经有数据可读，当没有数据可读时会阻塞。
 
-Server socket：
-
+Server socket：  
 - 有文件描述符
 - 不能读或写
 - 两种操作
@@ -577,8 +551,7 @@ while (true) {
 
 ## Synchroization
 
-**Process Control Block**: 内核将每个进程视为一个进程控制块（PCB），包含：
-
+**Process Control Block**: 内核将每个进程视为一个进程控制块（PCB），包含：  
 - 进程状态：RUNNING, READY, BLOCKED
 - 寄存器
 - PID、用户、优先级、...
@@ -604,14 +577,12 @@ Loop {
 }
 ```
 
-`RunThread`：
-
+`RunThread`：  
 - 加载线程的状态（寄存器、PC、栈指针）
 - 加载环境（虚拟内存空间）
 - 跳转到线程的入口点。
 
-Dispatcher 拿回控制权：
-
+Dispatcher 拿回控制权：  
 - 内部事件：线程主动放弃 CPU
   - I/O blocking（`read` 系统调用 -> trap 到 OS -> 内核发射读取命令 -> switch）
   - 等待其他线程的“信号”（调用 `wait`）
@@ -622,22 +593,19 @@ Dispatcher 拿回控制权：
 
 `yield` 会 trap 到 OS，调度器会选择下一个线程。
 
-进程对比线程：
-
+进程对比线程：  
 - Switch overhead：线程小，进程大
 - Protection：同进程弱（共享地址空间）
 - Sharing overhead：同进程小，不同进程大
 - Parallelism：进程不能多核并行，线程可以
 
-TCB 和线程栈的初始化：
-
+TCB 和线程栈的初始化：  
 - 初始化 TCB
   - 栈指针：指向栈顶
   - PC 返回地址：OS 汇编 routine `ThreadRoot`
   - 寄存器 `a0`、`a1` 初始化为 `fcnPtr` 和 `fcnArgPtr`
 
-线程的开始：
-
+线程的开始：  
 - `switch` 会选择新线程的 TCB，返回到其 `ThreadRoot` 的起始位置，开始运行新线程
 - `ThreadRoot` 会：
   - 做一些初始化工作，如记录线程起始时间
@@ -645,8 +613,7 @@ TCB 和线程栈的初始化：
   - 调用 `fcnPtr(fcnArgPtr)`
   - 清理线程资源，唤醒睡眠线程
 
-Shinjuku：
-
+Shinjuku：  
 - 多核、小任务，进程切换的 OS 开销太大。
 - 此问题的常见解决方案：
   - OS bypass
@@ -815,8 +782,7 @@ if (noNote A) {
 remove note B;
 ```
 
-问题：**活锁**
-
+问题：**活锁**  
 - 线程 A 留下 note A 后切换
 - 线程 B 留下 note B 后切换
 - 则两个线程都不会买牛奶
@@ -860,8 +826,7 @@ release(lock);
 
 ### Lock Implementation
 
-Naive 锁实现：加锁禁用中断，解锁开启中断。
-
+Naive 锁实现：加锁禁用中断，解锁开启中断。  
 - dispatcher 通过内部事件和外部事件两种方式拿回控制权
 - 对单核系统来说，只要不引发内部事件，并通过禁用中断避免外部事件，就可以防止切换
 - 问题：
@@ -909,15 +874,13 @@ release() {
 
 关键区域比 naive 实现短。
 
-在 `sleep` 后重新开启中断：
-
+在 `sleep` 后重新开启中断：  
 - 每个线程在睡眠前禁用中断
 - 每个线程在睡眠返回时首先开启中断
 
 ### Lock Implementation with Atomic Operations
 
-禁用中断锁实现的问题：
-
+禁用中断锁实现的问题：  
 - 不适用于用户模式
 - 不适用于多核：多核禁用中断需要 message passing，耗时
 
@@ -965,13 +928,11 @@ release() {
 }
 ```
 
-问题：
-
+问题：  
 - **busy waiting**。对多核系统来说，每一次 `test&set` 都是一次写，值会在 cache 间 ping-pong，性能很差。
 - Priority inversion：低优先级线程持有锁，高优先级线程无法获得锁（不会被抢占）。
 
-优点：
-
+优点：  
 - 不用禁用中断
 - 用户模式可用
 - 多核可用
@@ -1007,13 +968,11 @@ release() {
 // guard 就是之前的 naive 锁，我们用小锁保护了大锁
 ```
 
-优点：
-
+优点：  
 - 小锁保护大锁，显著减少了临界区的范围（仅包括检查 `val` 和操作等待队列）
 - 主锁会挂起并让出 CPU
 
-相比于之前禁用中断的锁实现，我们把：
-
+相比于之前禁用中断的锁实现，我们把：  
 - 禁用中断替换为 `while (test&set(guard)) {}`
 - `enable interrupts` 替换为 `guard = 0`
 
@@ -1027,8 +986,7 @@ Monitor：一个 Lock 以及零个或多个 Condition Variables。
 
 Conditional Variable：临界区内等待某个特定条件的线程的队列。
 
-Operations: 必须在获得锁的情况下调用
-
+Operations: 必须在获得锁的情况下调用  
 - `wait(&lock)`: 原子地释放锁并 sleep。在被唤醒后返回前，重新获得锁。
 - `signal()`: 唤醒一个等待的线程。
 - `broadcast()`: 唤醒所有等待的线程。
@@ -1099,8 +1057,7 @@ Consumer() {
 
 ### Readers/Writers
 
-正确性约束：
-
+正确性约束：  
 - 多个读者可以同时读
 - 一个写者写时，不能有读者读，也不能有其他写者写
 - 每次只能有一个线程操作共享数据
@@ -1108,8 +1065,7 @@ Consumer() {
 
 基本实现：
 
-状态变量（被 `lock` 保护）：
-
+状态变量（被 `lock` 保护）：  
 - `AR`: 活跃读者数量
 - `WR`: 等待读者数量
 - `AW`: 活跃写者数量
@@ -1211,15 +1167,13 @@ Writer() {
 }
 ```
 
-假如直接把 `okToRead` 和 `okToWrite` 替换为 `okContinue`，则会导致死锁：
-
+假如直接把 `okToRead` 和 `okToWrite` 替换为 `okContinue`，则会导致死锁：  
 - 读写者序列 R1, W1, R2
 - R1 正在读，W1 和 R2 等待
 - R1 读完，唤醒了 R2
 - 则 R2 在等 W1，W1 又在等 R2 的 signal，死锁
 
-在完整的实现中，正确性可以保证：
-
+在完整的实现中，正确性可以保证：  
 - 我们有 `lock`，所以大家还是“一个一个出来”的
 - 如果有在等待的写者，因为这是写者优先实现，`broadcast` 后某一个写者将变成活跃状态，且只有此写者活跃
 - 否则 `broadcast` 后一个读者变成活跃状态，随即所有读者都变为活跃状态
@@ -1241,8 +1195,7 @@ signal(Lock* lock, Sema* sem) {
 }
 ```
 
-问题：条件变量没有历史，信号量有历史。
-
+问题：条件变量没有历史，信号量有历史。  
 - 先 `signal`，再 `wait`，则 `wait` 应当阻塞
 - 先 `V` ，后 `P`，则 `P` 不应当阻塞
 - 条件变量和信号量语义不同
@@ -1264,8 +1217,7 @@ signal(Lock* lock, Sema* sem) {
 
 ## Scheduling
 
-任务：
-
+任务：  
 - 一个系统被不同 user 使用，每个 user 有若干 program，每个 program 有若干 thread。
 - 如何调度？
   - 以某些特定指标为目标，优化 CPU 时间的分配
@@ -1275,8 +1227,7 @@ signal(Lock* lock, Sema* sem) {
 
 执行模型：程序在 CPU burst 和 I/O burst 之间不断切换。调度器需要将 CPU 时间分配给即将 CPU burst 的线程，从而最大化 CPU 利用率。
 
-调度器的目标：
-
+调度器的目标：  
 - 最小化**完成时间（completion time）**
   - 定义：**任务下达到结束的延迟**
   - 快速响应
@@ -1287,15 +1238,13 @@ signal(Lock* lock, Sema* sem) {
 - 公平
 - （对于实时系统）可预测性
 
-**First-Come, First-Served (FCFS) Scheduling**：
-
+**First-Come, First-Served (FCFS) Scheduling**：  
 - 每个进程按照到达顺序排队
 - 优点：简单。缓存友好。
 - 问题：Head-of-line blocking，先到的长任务会阻塞后到的短任务。对短任务的响应时间经常很差。
 - 性能与任务到达顺序有关。短任务先到的话，响应时间表现更好。
 
-**Round Robin (RR) Scheduling**：
-
+**Round Robin (RR) Scheduling**：  
 - 每个进程分配一个时间片，时间片用完后被**抢占**，放入 ready queue 的末尾
 - 时间片（time quantum）
   - 如果太大，退化为 FCFS，**等待时间增加**
@@ -1310,8 +1259,7 @@ signal(Lock* lock, Sema* sem) {
 
 如果任务长度均匀，且都比较长，FCFS 更好（无上下文切换开销）。反之，如果任务长度不均匀，RR 更好。
 
-**严格优先级调度（Strict Priority Scheduling）**：
-
+**严格优先级调度（Strict Priority Scheduling）**：  
 - 总是先执行优先级高的任务
 - 每个优先级队列是按照 RR 执行的
 - 问题：
@@ -1326,8 +1274,7 @@ signal(Lock* lock, Sema* sem) {
     - 所有任务都提升 => 互动性任务响应时间变差
 
 
-假如我们能预测未来，就可以仿照最优 FCFS 调度：
-
+假如我们能预测未来，就可以仿照最优 FCFS 调度：  
 - **Shortest Job First (SJF)**：
   - 每次都选择下一个 CPU burst 最短的任务
   - 也叫 **Shortest Time to Completion First (STCF)**。
@@ -1344,8 +1291,7 @@ signal(Lock* lock, Sema* sem) {
   - 需要预测未来：**我怎么知道这个任务要跑多久？**
     - 适应性：根据历史数据来决定政策。$\hat{t}_n = f(t_{n-1}, t_{n-2}, \ldots)$
 
-**Lottery Scheduling**：
-
+**Lottery Scheduling**：  
 - 每个任务分配一定数量的 lottery tickets
   - 短的更多，长的更少，从而模拟 SRTF
   - 每个任务至少获得一个 ticket，以防止饥饿
@@ -1353,8 +1299,7 @@ signal(Lock* lock, Sema* sem) {
 - 平均而言，任务获得的 CPU 时间将和其分得的彩票数量成正比
 - 相比严格优先级调度的优点：对负载变化的反应更柔和
 
-**Multi-Level Feedback Scheduling**：
-
+**Multi-Level Feedback Scheduling**：  
 - 多个队列，每个队列有不同的优先级
 - 队列之间的调度：
   - Fixed priority：先高优先级队列，后低优先级队列
@@ -1371,8 +1316,7 @@ signal(Lock* lock, Sema* sem) {
   - 用时短的 I/O bound 任务会留在高优先级队列
 - 应用对算法的反制措施：插入短的无意义 I/O 以保持高优先级
 
-许多调度器的 assumption：
-
+许多调度器的 assumption：  
 - 经常睡眠，短 bursts => interactive 应用 => 高优先级
 - 计算密集 => 低优先级
 
@@ -1394,8 +1338,7 @@ Release() {
 }
 ```
 
-优点：
-
+优点：  
 - **不需要上下文切换**，如果锁持有时间很短，性能比互斥锁好（睡眠并唤醒的开销过大）
 - 适用于多个线程在 barrier 处等待的情况
 
@@ -1409,19 +1352,16 @@ Acquire() {
 }
 ```
 
-**Gang Scheduling**：多个线程完成同一个任务，将它们一起调度。
-
+**Gang Scheduling**：多个线程完成同一个任务，将它们一起调度。  
 - 使得 spin-waiting 更有效率
 
-Alternative: OS 通知并行应用其线程被调度到了多少个核上
-
+Alternative: OS 通知并行应用其线程被调度到了多少个核上  
 - 应用适应其分配到的核数
 - 核数增加对性能的提升是 sublinear 的，多应用 **space sharing** 更好
 
 ### Real-time Scheduling
 
-**Real-time scheduling**（实时调度）：
-
+**Real-time scheduling**（实时调度）：  
 - 目标：性能的**可预测性**
   - 实时系统中，性能是任务/类别中心的，被**先验**地保证
   - 常规系统中，性能是面向系统/吞吐量，是事后统计出来的
@@ -1434,8 +1374,7 @@ Alternative: OS 通知并行应用其线程被调度到了多少个核上
   - 以高概率满足 deadline
   - Constant Bandwidth Server (CBS)
 
-**Earliest Deadline First (EDF)**：
-
+**Earliest Deadline First (EDF)**：  
 - 周期性任务 $i$，周期 $P_i$，执行时间 $C_i$，deadline $D_i^{t+1} = D_i^t + P_i$
 - 每次都选择绝对 deadline 最急迫的任务执行
   - 抢占式调度：如果新任务的 deadline 比当前任务的 deadline 更早，则抢占当前任务
@@ -1446,8 +1385,7 @@ Alternative: OS 通知并行应用其线程被调度到了多少个核上
 
 Starvation：线程在一段不定时间内没有进展。
 
-我们考察哪些调度算法会导致 starvation：
-
+我们考察哪些调度算法会导致 starvation：  
 - Non-work-conserving 调度器
   - 即使有任务在 ready queue 中，调度器也可能让 CPU 空闲。这是导致 starvation 的调度算法的一个平凡解
 - **非抢占式调度**都有 starvation 的问题
@@ -1470,8 +1408,7 @@ Starvation：线程在一段不定时间内没有进展。
 
 ### Case Study
 
-**Linux $O(1)$ scheduler**：
-
+**Linux $O(1)$ scheduler**：  
 - **Nice**: -20 ~ 19，nice 越小，优先级越高
 - **优先级**：140 个优先级，值越小越优先
   - 0 ~ 99 是内核/实时任务
@@ -1489,15 +1426,13 @@ Starvation：线程在一段不定时间内没有进展。
   - 总是抢占非实时任务
   - 优先级不会动态变化
 
-**Proportional-Share Scheduling**：每个任务按优先级分配 CPU 份额（Lottery Scheduling）
-
+**Proportional-Share Scheduling**：每个任务按优先级分配 CPU 份额（Lottery Scheduling）  
 - Lottery 调度的简单版机制：
   - 每个任务分得 $N_i$ 个彩票
   - 选取一个彩票编号 $d\in {1, \ldots, \sum_i N_i}$
   - 将 $N_i$ 排序，第一个满足 $\sum_i^j N_i > d$ 的 $j$ 号任务被调度
 
-**Linux Completely Fair Scheduler (CFS)**：
-
+**Linux Completely Fair Scheduler (CFS)**：  
 - 基本思想：追踪每个线程的 CPU 时间，调度 CPU 时间少的线程以使它们追上平均 CPU 时间
 - 任何时刻总选择 CPU 时间最少的任务执行，直到其不再是 CPU 时间最少的任务
 - 使用一个 heap-like scheduling queue
@@ -1528,8 +1463,7 @@ Starvation：线程在一段不定时间内没有进展。
 |        Meeting Deadlines        |        EDF         |
 |    Favoring Important Tasks     |      Priority      |
 
-解释：
-
+解释：  
 - 吞吐量：FCFS 没有上下文切换开销，吞吐量最大
 - 平均完成时间：SRTF 是平均完成时间最优的调度算法
 - I/O 吞吐量：I/O 任务通常剩余时间很短，会被 SRTF 算法优先调度
@@ -1573,8 +1507,7 @@ free(1 MB);
 free(1 MB);
 ```
 
-Dining Lawyers 问题：
-
+Dining Lawyers 问题：  
 - 五根筷子，五个律师
 - 每个律师需要两根筷子才能吃饭
 - 如果每个律师同时抓住一根筷子，则没有律师可以吃饭 => 死锁！
@@ -1591,8 +1524,7 @@ Dining Lawyers 问题：
 3. No preemption：资源只能被持有的线程在用完后主动释放
 4. Circular wait：存在一个线程的循环等待链 $\{T_1, T_2, \ldots, T_n\}$，其中 $T_i$ 等待 $T_{i+1}$ 持有的资源，$T_n$ 等待 $T_1$ 持有的资源
 
-Resource-Allocation Graph：
-
+Resource-Allocation Graph：  
 - 系统模型：
   - 线程 $T_1, T_2, \ldots, T_n$
   - 资源种类 $R_1, R_2, \ldots, R_m$
@@ -1644,8 +1576,7 @@ bool is_deadlocked = (threads.size() > 0);
 
 现代操作系统确保系统中没有死锁（deadlock prevention），忽略应用程序中的死锁（deadlock denial）。
 
-预防死锁的方法：
-
+预防死锁的方法：  
 - 无限资源
   - 虚拟内存
 - 不允许共享资源
@@ -1657,16 +1588,14 @@ bool is_deadlocked = (threads.size() > 0);
 - 强迫所有线程都按某个特定顺序请求资源
   - 释放的顺序无所谓
 
-从死锁中恢复的方法：
-
+从死锁中恢复的方法：  
 - 终止线程，强迫其放弃资源
 - 抢占资源
   - 虚拟内存的机制也可以视为抢占内存资源
   - 操作系统将暂时不用的内存 page out 到磁盘，就是抢占了这块内存资源
 - 回滚死锁了的线程
 
-避免死锁的方法：
-
+避免死锁的方法：  
 - Naive 方法：当线程请求资源时，OS 检查这次请求是否会导致死锁
   - 一次请求可能不会直接导致死锁，但可能导致未来无可避免地陷入死锁
 - 三种状态
@@ -1695,8 +1624,7 @@ x.release();
 y.release();
 ```
 
-银行家算法：
-
+银行家算法：  
 - 线程事先声明它的最大资源需求量
 - 当线程请求资源时，银行家算法先假设此次请求被批准，然后运行死锁检测算法，若不会发生死锁，则批准
 - 系统会一直处于 safe 状态
@@ -1720,8 +1648,7 @@ Map<Thread, Array<int>> need_sim = max - alloc_sim;
 return !detect_deadlock(need, avail_sim);
 ```
 
-对律师就餐问题，银行家算法给出的解决方案：
-
+对律师就餐问题，银行家算法给出的解决方案：  
 - 如果拿的不是最后一根筷子，则批准拿走
 - 如果拿的是最后一根筷子，但拿走后仍然有其他人能吃饭，则批准拿走
 - 假如律师有 $k$ 只手
@@ -1733,8 +1660,7 @@ return !detect_deadlock(need, avail_sim);
 
 ZygOS: Achieving Low Tail Latency for Microsecond-scale Networked Tasks
 
-场景：serve us-scale RPCs
-
+场景：serve us-scale RPCs  
 - 应用：KV-stores、In-memory DB
 - 数据中心环境：fan-out/fan-in（一个人给很多人发消息/一个人收到很多人的消息）
 - Tail-at-scale 问题：
@@ -1744,8 +1670,7 @@ ZygOS: Achieving Low Tail Latency for Microsecond-scale Networked Tasks
   - 减少系统开销
   - 调度
 
-Queueing theory:
-
+Queueing theory:  
 - Processor
   - FCFS
   - Processor sharing (RR)
@@ -1758,8 +1683,7 @@ Queueing theory:
   - Bimodal
 - 无系统开销，服务时间独立，性能上界
 
-Baseline：
-
+Baseline：  
 - Linux：
   - Partitioned connection delegation
     - 每个核一个队列  
@@ -1771,8 +1695,7 @@ Baseline：
   - 与 Linux (partitioned conn) 不同，许多工作在用户空间完成，没有内核-用户上下文切换开销
 - ZygOS 的目标：Dataplanes + Linux (floating conn)
 
-执行模型：
-
+执行模型：  
 - Shuffle layer
   - 每个核有自己的 shuffle queue，当队列空时，可以从其他核的 shuffle queue 中偷取任务
   - 偷取完的任务通过 shuffle layer 归还任务原主人，由原主人还给网络层
@@ -1780,13 +1703,11 @@ Baseline：
 
 ### Tiresias
 
-挑战：
-
+挑战：  
 - 调度：不可预测的训练时间
 - 任务放置：过于激进的 job consolidation 会造成 GPU 碎片化和较长的 queueing delay
 
-方法：
-
+方法：  
 - Discretized 2D Age-Based Scheduler
   - 每次调度选择 GPU 时间最少的任务执行
   - GPU 时间 = 执行时间 * 占用 GPU 核数
@@ -1799,16 +1720,14 @@ Baseline：
 
 ### DRF
 
-Fair-sharing：
-
+Fair-sharing：  
 - 每个用户获得 $1/n$ 的资源
 - 泛化：max-min fairness
   - 每个用户获得 $1/n$ 的资源，除非它不需要这么多
 - 再泛化：weighted max-min fairness
   - 每个用户获得 $w_i / \sum_j w_j$ 的资源，除非它不需要这么多
 
-Fairness 的定义：
-
+Fairness 的定义：  
 - Share guarantee
   - 每个用户至少获得 $1/n$ 的资源，除非它不需要这么多
 - Strategy-proof
@@ -1819,8 +1738,7 @@ Fairness 的定义：
 
 模型：需求向量 $<2, 3, 1>$
 
-Natural policy:
-
+Natural policy:  
 - Asset fairness: 每个用户所有种类的资源的简单加和是相等的
   - 不满足 share guarantee
 - Dominant resource fairness
@@ -1830,24 +1748,21 @@ Natural policy:
   - 不同用户的 dominant share 相等，除非它们不需要这么多
   - 可以证明此策略满足 share guarantee、strategy-proof 和 Pareto efficiency
 
-Competitive Equilibrium from Equal Incomes (CEEI)：
-
+Competitive Equilibrium from Equal Incomes (CEEI)：  
 - 每个用户相同的初始禀赋
 - 他们会通过交易达到均衡
 - 但这不是 strategy-proof 的（不如 DRF 公平）
 
 ### FairRide
 
-模型：
-
+模型：  
 - 用户按照固定速率访问相等大小的文件
   - $r_{ij}$: 用户 $i$ 访问文件 $j$ 的速率
 - Allocation policy 决定选择哪些文件放入缓存
   - $p_j$：文件 $j$ 被缓存的比重
 - 用户关心其缓存命中率 $HR_i = \frac{total\_hits}{total\_accesses} = \frac{\sum_j p_j r_{ij}}{\sum_j r_{ij}}$
 
-性质：
-
+性质：  
 - Isolation guarantee (share guarantee)
   - 没有用户的状况比 static allocation 更差
 - Strategy-proofness
@@ -1856,8 +1771,7 @@ Competitive Equilibrium from Equal Incomes (CEEI)：
 
 定理：没有分配策略能同时满足这三个性质
 
-FairRide:
-
+FairRide:  
 - 满足 isolation guarantee 和 strategy-proofness
 - 达到近似最优的 Pareto efficiency
 - 方法：
@@ -1874,16 +1788,14 @@ FairRide:
 
 不同的进程/线程共享相同的硬件资源（CPU、内存、硬盘、I/O 设备），因此，我们需要虚拟化。
 
-进程虚拟地址空间：可访问地址及其状态的集合。
-
+进程虚拟地址空间：可访问地址及其状态的集合。  
 - 当读写某个地址时，可能发生
   - 正常内存读写
   - I/O 操作（I/O mapped memory）
   - 程序中止（segmentation fault）
   - 与其他程序的通信
 
-Memory multiplexing：
-
+Memory multiplexing：  
 - Protection：
   - 禁止访问其他进程的私有内存
 - Translation：
@@ -1894,8 +1806,7 @@ Memory multiplexing：
   - 不同线程的私有状态不能占据同一块物理内存
   - 需要重叠时可以实现重叠（通信）
 
-另一种视角：介入进程行为
-
+另一种视角：介入进程行为  
 - OS 介入进程的 I/O 操作：所有 I/O 操作通过系统调用实现
 - OS 介入进程的 CPU 使用：中断使 OS 可以抢占线程
 - OS 介入进程的内存访问：
@@ -1905,14 +1816,12 @@ Memory multiplexing：
 
 #### Segmentation
 
-Uniprogramming：
-
+Uniprogramming：  
 - 无翻译
 - 无保护
 - 同一时刻仅有一个应用程序运行，独占 CPU 和所有内存
 
-Primitive multiprogramming：
-
+Primitive multiprogramming：  
 - 无翻译
 - 无保护
 - Loader/Linker 调整程序内各指令包含的地址（load、store、jump）
@@ -1920,8 +1829,7 @@ Primitive multiprogramming：
 
 Multiprogramming with protection: Base and Bound
 
-带 segmentation 的 base and bound：
-
+带 segmentation 的 base and bound：  
 - 虚拟地址划分为两部分：segment 号和 offset
 - 处理器内部存一个 segment map
   - 将 segment 号映射到一个 (base, limit, valid) 三元组
@@ -1929,8 +1837,7 @@ Multiprogramming with protection: Base and Bound
   - 检查是否有效（valid）、是否越界（limit）
   - 如果有效且没有越界，则将 base 加上 offset，得到物理地址
 
-Segmentation 的若干观察：
-
+Segmentation 的若干观察：  
 - 每条内存访问指令都触发地址翻译
 - Segmentation 高效地支持了稀疏的虚拟地址空间
 - 栈触发 fault 时，系统会自动扩展栈空间
@@ -1948,8 +1855,7 @@ Segmentation 的若干观察：
 
 #### Paging
 
-Paging：
-
+Paging：  
 - 每个进程拥有一个页表，存放在物理内存中
 - 页表项：(Physical Page Number, permission flags)
 - 虚拟地址映射：
@@ -1965,8 +1871,7 @@ Paging：
   - 用户级别的系统库（只执行）
   - 共享内存段（shared memory segment）
 
-页表讨论：
-
+页表讨论：  
 - 上下文切换时，页表指针和页表界限需要保存和恢复
 - 保护是如何实现的？
   - Per process 的地址翻译
@@ -1978,8 +1883,7 @@ Paging：
 - 缺点：
   - 单级页表，页表项太多了（且大部分是空的），存不下
 
-两级页表：
-
+两级页表：  
 - 单级页表中 20 位的 VPN 进一步划分为 10 位的 VPN1 和 VPN2
 - 二级页表基址存放在 PageTablePtr 寄存器（CR3）
 - Page Table Entry（PTE）存放下一级页表的基址或 PPN，以及标志位（valid, read-only, read-write, write-only, ...）
@@ -1987,47 +1891,39 @@ Paging：
   - Segfault
   - 缺页（未缓存到内存）
 
-Demand paging：
-
+Demand paging：  
 - 内存中只存放活跃的页，其他页放在硬盘上（PTE 有效位置零）
 
-Copy-on-write：
-
+Copy-on-write：  
 - Unix fork 复制父进程的页表，并将两份页表的所有 PTE 都标记为只读
 - 写操作触发缺页异常，OS 复制对应的页
 
-Zero-fill-on-demand：
-
+Zero-fill-on-demand：  
 - 新的数据页应当被清零（be zeroed），防止敏感信息泄露
 - 将 PTE 标记为无效，使用时触发缺页异常，OS 清零对应的页
 
-内存共享：
-
+内存共享：  
 - 两个进程的二级页表的 PTE 指向同一个物理页（共享一页物理内存）
 - 两个进程的一级页表的 PTE 指向同一个二级页表（共享一大块物理内存）
 
-多级翻译：段 + 页
-
+多级翻译：段 + 页  
 - 低级：页表
 - 高级：段表
 - VPN1 是段号，指向一个 (base, limit, valid) 三元组，这个三元组指向一个二级页表
 - VPN2 指向二级页表中的 PTE
 - 上下文切换时，最高级段寄存器、最高级页表基址需要保存和恢复
 
-x86-64：四级页表
-
+x86-64：四级页表  
 - 48 位虚拟地址：(9, 9, 9, 9, 12)
 - 一页 4 KB
 - 每个 PTE 占 8 字节，每个页表有 512 个 PTE => 每个页表占 4 KB，刚好 fit 一个页
 
-IA64：六级页表
-
+IA64：六级页表  
 - 64 位虚拟地址：(7, 9, 9, 9, 9, 9, 12)
 - 很慢
 - 太多 almost-empty 页表
 
-多级页表分析：
-
+多级页表分析：  
 - 优点：
   - 按需创建 PTE（单级页表必须创建所有 PTE），节约内存，对稀疏地址空间友好
   - 容易的内存分配
@@ -2037,8 +1933,7 @@ IA64：六级页表
   - 页表需要是连续的（10b-10b-12b 地址组织使得每个页表都在同一页，解决了此问题）
   - 查表的时间开销（$k$ 级查表需要 $k$ 次内存访问）
 
-Dual-Mode 操作：
-
+Dual-Mode 操作：  
 - 进程不能修改自己的页表
   - 否则它就能访问整个物理内存了
 - 硬件提供至少两个模式
@@ -2047,8 +1942,7 @@ Dual-Mode 操作：
   - 通过设置仅内核模式可见的控制寄存器可以切换模式
   - 内核可以切换到用户模式，用户程序必须调用特殊异常来切换到内核模式
 
-Inverted Page Table:
-
+Inverted Page Table:  
 - 传统多级页表，每个页表必须存放所有的 PTE，浪费内存空间
 - 倒置页表通过一个全局的 hash 表，将 (PID, VPN) 映射到 PPN
 - 倒置页表的大小和虚拟地址空间无关，只和物理内存大小有关（对于 64 位机器很有吸引力，因为 64 位机器前者远大于后者）
@@ -2069,22 +1963,24 @@ Inverted Page Table:
 
 处理器用虚拟地址向 MMU 发出请求，MMU 在 TLB 中找到对应物理地址回应给 CPU（或触发异常）。 
 
-衡量缓存性能的指标：
+衡量缓存性能的指标：平均访问时间
 
-- 平均访问时间：$Average Access Time = Hit Rate \cdot Hit Time + Miss Rate \cdot Miss Time$
+$$\begin{align*}
+\text{Average Access Time} &= \text{Hit Rate} \cdot \text{Hit Time} + \text{Miss Rate} \cdot \text{Miss Penalty} \\
+&= \text{Hit Time} + \text{Miss Rate} \cdot \text{Miss Penalty} \\
+\end{align*}$$
+
 
 如果没有 cache，每次实际 DRAM 访问需要 页表级数 + 1 次 DRAM 访问，开销极大，且如果页表在硬盘中，还需要 I/O。
 
-缓存不命中的原因
-
+缓存不命中的原因  
 - Compulsory：冷启动
 - Capacity：缓存不够大
 - Conflict：多个内存位置被映射到同一个缓存位置
   - 解决方法：增大缓存、提高 associativity
 - Coherence：其他进程（I/O）更新了内存
 
-Cache 回顾：
-
+Cache 回顾：  
 - 地址分为 (Cache Tag, Cache Index, Byte Offset)
 - 直接映射：
   - 每组只有一行
@@ -2107,8 +2003,7 @@ Cache 回顾：
     - 频繁的写场景下性能更好
     - 复杂
 
-物理索引 Cache vs 虚拟索引 Cache：
-
+物理索引 Cache vs 虚拟索引 Cache：  
 - 物理索引 Cache：
   - CPU 通过虚拟地址访问 TLB，TLB 翻译得到物理地址访问 Cache
   - 页表中存放物理地址
@@ -2124,8 +2019,7 @@ Cache 回顾：
   - 坏处：
     - 每个数据块在 cache 中存多份
 
-TLB 组织：
-
+TLB 组织：  
 - Miss time 极高（多级页表遍历）
 - 如果用低位作为 TLB 的组索引，则 code、data、stack 段可能会映射到同一组
   - 至少需要 3 路组相联
@@ -2134,8 +2028,7 @@ TLB 组织：
 - 小 TLB 一般全相联
 - 更大的则在全相联 TLB 之前放一个直接映射 TLB（4-16 个条目），称为 TLB slice
 
-虚拟地址：(VPN, VPO) => (VPN, cache index, byte offset)
-
+虚拟地址：(VPN, VPO) => (VPN, cache index, byte offset)  
 - VPO 恰好又被划分为 cache index 和 byte offset，且 VPO = PPO
 - 从而 TLB 查找（使用 VPN）和 cache 查找的组索引过程（使用 PPO）可以**并行**进行：
   - TLB 使用 VPN 查找对应的 PPN，同时 cache 使用 PPO 查找对应的 cache set
@@ -2143,8 +2036,7 @@ TLB 组织：
 - VPO 为 12 位，这限制了 cache 的大小，更大的 cache 难以完全并行化，需要其他设计
 - 虚拟地址索引的 cache 能更完全地并行
 
-上下文切换时
-
+上下文切换时  
 - 因为虚拟地址空间也被切换了，TLB 条目都无效了
 - 选项：
   - 无效化 TLB 条目：简单但开销大（两个进程来回切换）
@@ -2155,3 +2047,133 @@ TLB 组织：
 - 虚拟索引的 cache，还需要 flush
 
 ### Demand Paging
+
+Page Fault:  
+- 地址翻译失败时
+  - PTE 无效、特权级违规（Privilege level violation，用户执行内核指令/访问内核空间地址）、访问违规（Access violation，写只读页、用户访问内核页等）
+  - 这会导致 fault/trap
+    - interrupt 指外部中断
+  - 可能在指令取指或数据访问时发生
+- Protection violation 通常终止指令执行
+- 其他 page fault 会使 OS 处理并重试该指令，有可能是以下几种情况：
+  - 分配新的栈页
+  - 使得页可访问（Copy-on-write）
+  - 从下级存储器中读取页（demand paging）
+
+Demand Paging：  
+- 现代程序用许多物理内存，但它们将 90% 的时间花在执行 10% 的代码上
+- 将主存作为硬盘的 cache
+- 工作过程：
+  - 进程访问一个页，但页表中该页的 PTE 无效
+  - MMU traps 到 OS（触发 page fault）
+  - OS 中的 page fault handler 
+    - 选择一个空闲的物理页
+      - OS 维护一个空闲物理页列表
+      - 当物理内存占用过高时，OS 会运行 reaper：写回脏页、清零冷页
+      - 如果没有空闲物理页：根据替换算法选择要替换的页。如果该页被修改过，将其写回到硬盘，并在 TLB 中无效化该页的 PTE
+    - OS 定位新页在 swap file 的位置，将其加载到内存
+    - 更新页表 PTE
+    - 将用户进程标记为 ready
+  - 调度器未来会调度该进程，重试该指令
+  - 在等待页读写的过程中，OS 可以调度其他进程
+- Demand paging 作为 caching：
+  - 块大小：4 KB
+  - 全相联（任意映射）
+  - 替换策略
+  - 未命中：从低级存储器中填充
+  - 写：写回（需要 dirty bit）
+- 提供了无限内存的幻觉：核心是**透明的间接寻址层（页表）**
+  - 用户不需要知道数据的真实存储位置
+
+Demand Paging 应用：  
+- 栈扩展
+  - 分配并清零一个页
+- 堆扩展
+- 进程 fork
+  - 创建页表的拷贝
+  - 将所有 PTE 标记为非写的
+  - 共享的只读页仍然是共享且只读的
+  - 写时复制（Copy-on-write）
+- Exec
+  - 只在真正使用时将二进制文件加载到内存中
+- mmap
+  - 显式共享内存区域或将文件映射到内存
+
+将可执行文件加载到内存：  
+- OS 初始化寄存器，设置堆栈
+- OS 为进程创建一个完整的 VAS 映射：
+  - 通过页表记录所有虚拟页的状态：
+    - 驻留页：已加载到物理内存
+    - 非驻留页：仍存储在磁盘的交换文件（Swap File）中
+- 硬件访问的页一定要驻留在物理内存中——通过缺页异常来实现
+- **OS 必须记录非驻留页在交换文件中的位置**，以便在缺页异常时加载到内存中
+  - `find_block(pid, page_num) -> disk_block`
+  - 通常也会想将驻留页备份一份到 swap file
+  - 可以将代码段直接映射到硬盘映像，从而节省 swap file 空间。如果程序有多份运行实例，可以共享代码段
+
+### Replacement Policy
+
+工作集（working set）模型：  
+- 每个进程的工作集是它在过去一段时间内访问的页的集合
+- 随着时间推移，cache 被越来越多进程的工作集填满
+
+Demand paging cost:
+
+$$\begin{align*}
+\text{Effective Access Time} &= \text{Hit Rate} \cdot \text{Hit Time} + \text{Miss Rate} \cdot \text{Miss Penalty} \\
+&= \text{Hit Time} + \text{Miss Rate} \cdot \text{Miss Penalty} \\
+\end{align*}$$
+
+Demand Paging misses：  
+- Compulsory：冷启动，页尚未加载到物理内存
+  - 预取（prefetch），提前加载页到内存。需要预测未来的访问模式！
+- Capacity：物理内存不够大
+  - 加物理内存
+  - 调整每个进程分配的内存比例
+- Conflict：虚拟内存是“全相联”的，原理上不存在 conflict miss
+  - 任意虚拟页可以映射到任意物理页，不存在固定位置的竞争
+- Policy：页本来在物理内存中，然而被替换政策过早地踢出了
+
+Replacement Policy:  
+- Demand paging 的 miss penalty 极高：硬盘 I/O！
+- First In, First Out (FIFO)：
+  - 最老的页被替换
+  - 不好——考虑的是资历，而非使用频率
+- RANDOM
+  - 硬件上简单，TLB 的典型做法
+  - 不可预测
+- MIN（Minimum）
+  - 替换未来最长时间不使用的页
+  - 理论最优，但我们无法预测未来
+  - 过去是未来的良好指示
+- Least Recently Used (LRU)：
+  - 替换最近最少使用的页
+  - 局部性：最近用得少，未来可能也用得少
+  - 似乎是 MIN 的优秀近似
+  - 实现：
+    - 链表：每次访问都将对应页移到链表头部，替换时删除链表尾部的页
+    - 页访问时需要立即更新链表
+    - 性能差：链表操作需要很多指令
+  - 实践中使用 LRU 的近似实现
+
+Stack property：当加物理内存时，不命中率不会增加 
+- LRU 和 MIN 算法可以保证此性质
+  - 它们向前/向后看 $X$ 个不同的物理页
+  - 当物理内存增加到 $X+1$ 个页时，它们仍然会向前/向后看到原来的 $X$ 个页，加上一个新的不同的页
+  - **更大的内存始终包含原内存的所有页**
+- FIFO 不保证此性质
+  - 加内存后，FIFO 包含的页可能与原内存完全不同
+
+Clock 算法：  
+- 将物理页排成一个环，一个指针指向当前页
+- 硬件每次访问某个物理页时，会将该页的 use bit（accessed bit）置 1
+- 每次 page fault 时，
+  - 指针前进一页
+  - 检查 use bit：
+    - 如果为 0，则替换该页
+    - 如果为 1，则将其清零，继续前进一页
+- 指针最多前进 $N$ 次，$N$ 是物理页数量（当所有 use bit 都被设置）
+- 指针前进很慢是好事
+  - Page fault 少，或很快能找到 use bit 为 0 的页
+- 简单粗暴将物理页二分成两组
+
