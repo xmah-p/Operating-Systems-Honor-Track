@@ -27,10 +27,11 @@
     - [Case Study](#case-study)
     - [Choosing the Right Scheduler](#choosing-the-right-scheduler)
     - [Deadlock](#deadlock)
-    - [ZygOS](#zygos)
-    - [Tiresias](#tiresias)
-    - [DRF](#drf)
-    - [FairRide](#fairride)
+    - [Scheduling in Modern Computer Systems](#scheduling-in-modern-computer-systems)
+      - [ZygOS](#zygos)
+      - [Tiresias](#tiresias)
+      - [DRF](#drf)
+      - [FairRide](#fairride)
   - [Memory](#memory)
     - [Address Translation and Virtual Memory](#address-translation-and-virtual-memory)
       - [Segmentation](#segmentation)
@@ -38,6 +39,8 @@
     - [Caching](#caching)
     - [Demand Paging](#demand-paging)
     - [Replacement Policy](#replacement-policy)
+    - [Memory Management in Modern Computer Systems](#memory-management-in-modern-computer-systems)
+      - [FaRM: Fast Remote Memory](#farm-fast-remote-memory)
 
 
 # Operating Systems
@@ -1656,7 +1659,10 @@ return !detect_deadlock(need, avail_sim);
   - 如果拿的是倒数第二根筷子，且拿走后没有人能拿够 $k-1$ 根筷子，则不批准拿走
   - ...
 
-### ZygOS
+
+### Scheduling in Modern Computer Systems
+
+#### ZygOS
 
 ZygOS: Achieving Low Tail Latency for Microsecond-scale Networked Tasks
 
@@ -1701,7 +1707,7 @@ Baseline：
   - 偷取完的任务通过 shuffle layer 归还任务原主人，由原主人还给网络层
 - 通过 shuffle layer 使得多队列表现收敛到单队列表现
 
-### Tiresias
+#### Tiresias
 
 挑战：  
 - 调度：不可预测的训练时间
@@ -1718,7 +1724,7 @@ Baseline：
 
 实验结果媲美 SRTF。
 
-### DRF
+#### DRF
 
 Fair-sharing：  
 - 每个用户获得 $1/n$ 的资源
@@ -1753,7 +1759,7 @@ Competitive Equilibrium from Equal Incomes (CEEI)：
 - 他们会通过交易达到均衡
 - 但这不是 strategy-proof 的（不如 DRF 公平）
 
-### FairRide
+#### FairRide
 
 模型：  
 - 用户按照固定速率访问相等大小的文件
@@ -1812,7 +1818,7 @@ Memory multiplexing：
 - OS 介入进程的内存访问：
   - 每次内存访问都经过 OS 太慢了
   - 地址翻译：硬件支持的常规访问介入
-  - Page fault：非常规访问 trap 到 OS 处理
+  - 缺页（page fault）：非常规访问，trap 到 OS 处理
 
 #### Segmentation
 
@@ -1844,7 +1850,7 @@ Segmentation 的若干观察：
 - Segment map 需要保护模式
   - 代码段应只读
 - segment map 存放在 CPU，上下文切换时无需保存和恢复
-- 当 segment 无法装进内存时，会 swap out 到硬盘
+- 当 segment 无法装进内存时，会换出到硬盘
 - 问题
   - 物理内存需要容纳变长的块
   - 为了装得下所有段，可能需要多次移动进程的地址空间
@@ -2042,20 +2048,20 @@ TLB 组织：
   - 无效化 TLB 条目：简单但开销大（两个进程来回切换）
   - 在 TLB 中包含 PID：需要硬件支持
 - 如果页表改变了，也需要无效化 TLB 条目
-  - 比如页被 swap out
+  - 比如页被换出
   - TLB Consistency
 - 虚拟索引的 cache，还需要 flush
 
 ### Demand Paging
 
-Page Fault:  
+缺页:  
 - 地址翻译失败时
   - PTE 无效、特权级违规（Privilege level violation，用户执行内核指令/访问内核空间地址）、访问违规（Access violation，写只读页、用户访问内核页等）
   - 这会导致 fault/trap
     - interrupt 指外部中断
   - 可能在指令取指或数据访问时发生
 - Protection violation 通常终止指令执行
-- 其他 page fault 会使 OS 处理并重试该指令，有可能是以下几种情况：
+- 其他缺页会使 OS 处理并重试该指令，有可能是以下几种情况：
   - 分配新的栈页
   - 使得页可访问（Copy-on-write）
   - 从下级存储器中读取页（demand paging）
@@ -2065,7 +2071,7 @@ Demand Paging：
 - 将主存作为硬盘的 cache
 - 工作过程：
   - 进程访问一个页，但页表中该页的 PTE 无效
-  - MMU traps 到 OS（触发 page fault）
+  - MMU traps 到 OS（触发缺页）
   - OS 中的 page fault handler 
     - 选择一个空闲的物理页
       - OS 维护一个空闲物理页列表
@@ -2167,13 +2173,143 @@ Stack property：当加物理内存时，不命中率不会增加
 Clock 算法：  
 - 将物理页排成一个环，一个指针指向当前页
 - 硬件每次访问某个物理页时，会将该页的 use bit（accessed bit）置 1
-- 每次 page fault 时，
+- 每次缺页时，
   - 指针前进一页
   - 检查 use bit：
     - 如果为 0，则替换该页
     - 如果为 1，则将其清零，继续前进一页
 - 指针最多前进 $N$ 次，$N$ 是物理页数量（当所有 use bit 都被设置）
+  - 如果指针一边清空 use bit，OS 一边上下文切换重置 use bit，会不会永远找不到 victim?
+  - 触发缺页的那个线程的帧不会被访问，因此至少总能找到它们作为 victim
 - 指针前进很慢是好事
-  - Page fault 少，或很快能找到 use bit 为 0 的页
+  - 缺页少，或很快能找到 use bit 为 0 的页
 - 简单粗暴将物理页二分成两组
+
+Clock 算法的变种：Nth Chance  
+- OS 为每帧维护一个计数器
+- 每次缺页时，
+  - 指针前进一页
+  - 检查 use bit：
+    - 如果为 0，则**增加计数器**，若计数器达到 N，则替换该页
+    - 如果为 1，则将其和计数器清零，继续前进一页
+- N 的取值：越大越接近 LRU，越小效率越高
+- 替换脏页的开销更大，可以给脏页更多机会
+
+不需要硬件支持的脏位：利用只读位 W
+- 初始，标记所有页为只读，清除所有软件脏位
+- 写触发缺页：
+  - 若可写，OS 置软件脏位并置 `W = 1`
+  - 否则结束用户进程
+- 当页被换出，清除脏位，标记为只读
+
+不需要硬件支持的 use bit：  
+- 初始，标记所有页无效，清除所有软件 use 位（和软件脏位）
+- 读写触发缺页
+- OS 置软件 use 位：
+  - 若为读，标记为只读
+  - 若为写且可写，置脏位，标记为可写
+- 时针扫过时清空软件 use 位，并标记为无效。**不清空脏位**，留待换出时使用
+
+如果允许利用缺页，能否实现比 Clock 更优的替换策略？
+
+Second Chance List:  
+- 内存分为两部分：FIFO 的 Active list 和 LRU 的 Second Chance list
+- Active list 中的页有效，SC list 中的页无效
+- 若访问的页在 Active list 中：正常访问
+- 若访问的页不在 Active list 中：
+  - Active list 中溢出的页总是放到 SC list 队首，并标记为无效
+  - 若在 SC list 中：将它移动到 Active list 队首，标记为可读写
+  - 若不在 SC list 中：page in 到 Active list 队首，标记为可读写；page out SC list 队尾的页
+- 如果 SC list 中没有页，算法退化为 FIFO
+- 如果 SC list 中包含所有页，算法等价于 LRU，但每次访问都触发缺页
+- 取一个中间值，相比于 FIFO：
+  - 更少的磁盘访问——近似 LRU，长时间未用才会换出
+  - 缺页开销更大
+
+Free list:  
+- OS 维护一个空闲物理页列表
+  - 在后台用 clock 算法填充
+  - 脏页在进入 free list 前需要开始写回
+- 类似 VAX second-chance list：如果物理页在被回收前又被使用了，就直接中止换出
+- 缺页处理更迅速：可立即获取可用物理页
+
+Reverse Page Mapping (Coremap):  
+- 当驱逐物理页时，需要无效化对应的页表项——需要物理页到虚拟页的映射
+- 注意一个物理页可能被多个页表共享——多个页表项映射到同一物理页
+- 方法一：每个 page descriptor (Linux 中的物理页对象) 维护一个 PTE 链表。
+  - 太昂贵
+- 方法二：每个 page descriptor 维护一个指向 VMA (Virtual Memory Area) 的指针，OS 从 VMA 中找对应的页表项
+
+物理页分配  
+- 每个进程得到相等还是不等份额的内存？
+  - Equal allocation: 每个进程份额相同
+  - Proportional allocation: 每个进程份额与其 size 成正比
+  - Priority allocation: 每个进程份额与其优先级成正比
+  - Page-Fault Frequency allocation: 若进程缺页频率过高，则增加其份额，否则减少其份额
+    - 难以确定 upper bound 和 lower bound
+    - 不用 upper bound 和 lower bound，将进程的缺页频率排序，将缺页率低的进程的页给缺页率高的进程
+- 每个进程至少需要一定数量的页，以确保可以运行
+- Replacement Scope：
+  - 进程可以驱逐所有物理页
+  - 进程只能驱逐自己的物理页
+
+Thrashing:
+- 进程没有足够的页，不断触发缺页换入换出，实际进展很慢
+- 程序内存访问有时间局部性和空间局部性，一段时间内（如最近一万条指令）访问的一组页称为工作集
+- 如果分配的内存小于工作集，进程就会 thrashing
+- 所有进程的工作集之和就是当前的物理页需求，如果物理页需求大于物理内存大小，就会导致 thrashing
+  - 策略：此时挂起一些进程或换出一些进程，避免 thrashing，提高效率
+
+Compulsory miss：  
+- 访问从未访问过的页（lazy loaded 或刚刚被换入）
+- Clustering：缺页时一次性加载 faulting page 周围的多个页
+  - 磁盘访问连续多个页的开销相比访问单个页增加很小
+- 工作集追踪：追踪进程的工作集，换入进程时直接换入整个工作集
+
+### Memory Management in Modern Computer Systems
+
+#### FaRM: Fast Remote Memory
+
+硬件趋势：  
+- 内存变得廉价：服务器内存上 TB，小集群数十 TB
+- 数据中心网络：40 Gbps 吞吐量，1-3 us 延迟，RDMA primitives
+
+RDMA: Remote Direct Memory Access  
+- 机器 A 想要读机器 B 的内存：
+  - A 的 CPU 向 A 的 NIC 发送一个 RDMA 请求，A 的 NIC 将请求通过网络发送给 B
+  - B 的 NIC 收到请求，通过 DMA 将 B 的内存拷贝到自己内部的缓冲区，通过网络发给 A 的 NIC
+  - A 的 NIC 收到数据，通过 DMA 将数据拷贝到 A 的内存
+  - 整个过程绕过了 B 的 CPU 和内核
+- 相比 TCP 有更优的吞吐量和延迟
+
+数据中心应用访问模式不规则，对延迟敏感。
+
+Setup:  
+- 我们有
+  - TB 级的 DRAM
+  - 数百 CPU 核心
+  - RDMA 网络
+- 目标
+  - 数据存放在内存中，用 RDMA 访问
+  - 数据和计算放在一起
+    - 传统模型中服务器存储数据，客户端执行应用
+    - 对称模型：服务器既存储数据，也执行应用
+
+共享地址空间：  
+- 所有机器的内存属于同一个地址空间
+- 位置（属于哪台机器）、并发、故障处理都是透明的，编程者无需关心
+
+优化：
+- Locality awareness
+  - 将一起被访问的数据放在一起
+  - 计算以 RPC 形式被发送的数据所在机器上被执行
+  - 完成后再把数据发回去
+
+Transactions:  
+- 执行（Execution）阶段
+  - 利用 RDMA 读取数据，写 buffer 在本地
+- 提交（Commit）阶段
+  - 将所有数据上锁
+  - Validate 数据（是否最新），失败则回滚重试
+  - 利用 RDMA 更新其他服务器的数据，解锁
 
