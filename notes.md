@@ -41,6 +41,11 @@
     - [Replacement Policy](#replacement-policy)
     - [Memory Management in Modern Computer Systems](#memory-management-in-modern-computer-systems)
       - [FaRM: Fast Remote Memory](#farm-fast-remote-memory)
+      - [vLLM](#vllm)
+      - [InfiniSwap](#infiniswap)
+      - [AIFM](#aifm)
+      - [PipeSwitch](#pipeswitch)
+      - [TGS](#tgs)
 
 
 # Operating Systems
@@ -2268,6 +2273,16 @@ Compulsory miss：
 
 ### Memory Management in Modern Computer Systems
 
+- Memory Abstraction
+  - FaRM
+  - vLLM
+- Demand Paging: remote memory over network
+  - InfiniSwap
+  - AIFM
+- Demand Paging: memory swapping between GPU memory and host memory
+  - PipeSwitch
+  - TGS
+
 #### FaRM: Fast Remote Memory
 
 硬件趋势：  
@@ -2312,4 +2327,163 @@ Transactions:
   - 将所有数据上锁
   - Validate 数据（是否最新），失败则回滚重试
   - 利用 RDMA 更新其他服务器的数据，解锁
+
+#### vLLM
+
+背景：服务 LLM 很慢且成本高昂
+- Auto-Regressive 架构的 GPU 利用率不高：batching 多个请求，并行化
+- 然而 batchsize 被 KV cache 的低效内存管理所限制
+  - 先前系统的 KV cache 存储在一个按照最大长度 pre-allocated 的连续内存块中，导致严重的内部碎片化
+  - 而不同请求的 max length 可能不同，导致外部碎片化
+
+PagedAttention: 
+- 请求就像 OS 中的进程，内存被分为若干固定大小、连续的 KV blocks（每个可以存 4 个 token），就像 OS 中的页
+- Block table 将逻辑块号映射到物理块号
+- Allocate on demand
+- 额外的重定向带来 10-15% 的开销
+- 内部碎片化：只有每个 sequence 的最后一个 block 存在内部碎片
+- 无外部碎片化：固定大小的连续分块
+- 页表机制还可以轻易地实现共享和 copy-on-write（parallel sampling：一个输入产生多个输出；beam search）
+
+当内存不够用时:
+- 选项 1：Swapping to CPU
+- 选项 2：Preempt and Recover (i.e. delete and recompute)
+- 两种选项都需要作用在整个请求上，因为请求的每一步都用到所有先前的 tokens
+- 块大小较小时 swapping 开销较大
+- Recomputation 可以并行，较快
+- 最终选择：Request Preemption & Recovery
+
+和 OS paging 的异同：
+- 相同点：
+  - OS 的页 <=> KV blocks：减轻碎片化
+  - 进程间共享页 <=> 采样间共享 KV blocks：减少内存浪费
+- 不同点
+  - 单级块表：块表和数据相比占用空间很小
+  - Preemption & Recovery：抢占请求，通过 recomputation 恢复
+
+#### InfiniSwap
+
+背景：
+- 应用的工作集如果不能完全 fit 到内存中，性能就会显著下降
+- 集群中已分配的内存占 80%，但实际使用的只占 50%
+
+想法：  
+- 当机器 1 内存不够时，从其他机器的内存中拿
+- 不需要添加新的硬件，不需要修改现有应用
+- 可以容忍失败
+- 能够 scale
+
+方法：
+- 在虚拟内存系统之下做了一个 InfiniSwap Block Device，作为 swap space 和 request router
+- 本地磁盘作为 InfiniSwap block device 的异步 backup
+- 通过单边 RDMA 以及运行在远程机器上的 InfiniSwap Daemon，绕过远程机器的 CPU
+- 以 slab 为单位，用分布式的分配算法（Power of Two Choices）来分配内存
+
+特点：
+- 支持一对多（一个机器请求多个机器的空闲内存）和多对多
+
+#### AIFM
+
+Memory 是非弹性的，被物理内存容量所限制。
+
+先前基于 OS paging 的方案（infiniSwap）性能不好：  
+- 语义 gap
+  - 以页为单位导致 R/W amplification：只读一个字节，但要加载一整页
+  - OS 缺乏应用的知识，无法 prefetch：应用遍历链表，对 OS 而言就是随机访问
+- 高内核开销
+  - 缺页时从远程 swap in，浪费很多 CPU 时钟周期
+
+方法：  
+- Remotable Data Structure Library
+  - 提供数据结构 API，底层封装了 prefetcher
+  - 解决了语义 gap
+- Userspace Runtime
+  - 在应用中 yield 以避免陷入内核态
+  - 解决了高内核开销
+- Pauseless Evacuator
+  - 无暂停地将本地的对象转移到远程机器
+  - 解决了内存回收问题
+- Remote Agent
+  - 将计算转移到远程机器
+  - 解决了网络带宽小于 DRAM 带宽的问题
+
+**和 InfiniSwap 的区别**：
+- InfiniSwap 在 kernel 中以 page 为单位，不需要修改应用实现
+- AIFM 的 userspace runtime 中，以对象为单位，需要改一些应用实现
+
+#### PipeSwitch
+
+目前深度学习的训练任务和推理任务常常在不同集群上运行。因为推理任务有明显的时间周期性（白天多凌晨少），如果能在相同的集群上同时运行训练任务和推理任务，就能更高效。
+
+目标：  
+- 多个深度学习任务的细粒度 multiplexing，要求 GPU 高效
+- 毫秒级上下文切换延迟和高吞吐量
+
+方法：  
+- 上下文切换：
+  - 停止当前任务，准备下一个任务
+  - 通过 pipelined model transmission 执行任务
+  - 清理上一个任务的环境
+
+上下文切换的开销来源：  
+- 模型传输 model transmission
+- 内存分配
+- 任务初始化
+- 任务清理
+
+Pipelined model transmission and execution：
+- 深度学习模型是分层的
+- 将模型传输和执行并行：传输第 $i$ 层的同时可以执行第 $i-1$ 层
+- 模型传输被切分成若干次，需要多次调用 PCIe——粒度不能太细，否则 PCIe 调用开销大
+- 传输和执行的同步开销
+- 不以层为单位，而是以 group（多层）为单位，从而摊平前面的两个开销
+- 大大降低了模型传输的开销
+
+Unified memory management：  
+- 通过一个 Memory Daemon 统一管理显存
+
+Active-standby worker switching：  
+- 将每个任务的初始化切成两段，第一段不需要显存，可以在一开始就完成
+- 初始化的第二段在可以在调度后立即开始，和先前任务的清理并行，因为它只标记而不实际使用显存
+
+#### TGS
+
+核心思想：分享 GPU 核心以增强 GPU 利用率
+
+深度学习训练任务有两种：
+- Production job：全速运行，不能接受性能损失
+- Opportunistic job：可以接受性能损失，利用空闲 GPU 核心
+
+先前工作：
+- 应用层：AntMan
+  - 修改深度学习框架（TensorFlow/PyTorch）
+  - 支持 GPU 共享和显存 oversubscription
+  - 透明性差，需要用户使用特定的框架，需要维护特定的框架
+- OS 层：NVIDIA MPS
+  - GPU 利用率低，不支持显存 oversubscription
+  - 需要应用知识以设置合适的资源限制
+  - 错误隔离差，一个任务出错影响其他任务
+- OS 层：NVIDIA MIG
+  - 性能 isolation：不能任意分区 GPU，不能动态调整 GPU 资源
+  - 兼容性差，不支持 multi-GPU instance 的共享
+
+共享 CPU 资源：
+- Strawman 方法：优先级调度
+  - 根据 GPU 内核队列控制 opportunistic job
+  - 但队列的状态不能很好反映剩余 GPU 资源，GPU 利用率低
+
+TGS：适应性的速率控制
+- 监控 production job 的 GPU 发送速率，保证其不受限制
+- 根据 production job 的速率动态调整 opportunistic job 的速率
+
+Transparent unified memory of TGS:  
+- 核心思想：利用 CUDA unified memory，透明地统一显存和 host memory
+- 在第一次访问时才分配实际物理显存，GPU 利用率高
+- 显存 oversubscribed 时，TGS 改变虚拟显存映射，从而驱逐 opportunistic job 的显存到 host memory
+
+TGS 的特点：
+- 透明性：不需要修改应用
+- Performance isolation：opportunistic job 的性能不会影响 production job
+- 高 GPU 利用率
+- Fault isolation
 
