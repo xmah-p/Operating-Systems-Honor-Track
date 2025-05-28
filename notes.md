@@ -46,6 +46,9 @@
       - [AIFM](#aifm)
       - [PipeSwitch](#pipeswitch)
       - [TGS](#tgs)
+  - [I/O](#io)
+    - [Hard Disk Devices (HDDs)](#hard-disk-devices-hdds)
+    - [Solid State Drives (SSDs)](#solid-state-drives-ssds)
 
 
 # Operating Systems
@@ -2486,4 +2489,149 @@ TGS 的特点：
 - Performance isolation：opportunistic job 的性能不会影响 production job
 - 高 GPU 利用率
 - Fault isolation
+
+## I/O
+
+总线（bus）：数据传输通路 + 协议
+
+协议：发起方（initiator）发起请求、仲裁机制（arbitration）授权、识别接收方、地址/控制/数据信号传输握手
+
+靠近 CPU 的地方带宽高、延迟低，但不灵活。靠近 I/O 子系统的地方带宽低、延迟高，但灵活。
+
+用一个总线就能连接很多设备，但这使得一次只能进行一个事务（transaction），因此需要仲裁机制。
+
+PCI（Peripheral Component Interconnect）：
+- 一开始是总线
+- 并行总线有许多局限性：必须兼容最慢的设备，拖慢整体时钟频率
+
+PCIe：  
+- 不再是并行总线，而是一组串行链路（lane）
+- 速度不再受限，慢速设备不再拖累整体
+
+CPU 通过 device controller（可视为一个嵌入式的计算机）与 I/O 设备通信，有 port-mapped I/O 和 memory-mapped I/O 两种方式。
+
+CPU 上也有很多 I/O 相关的部件，例如 Sky Lake 的 PCH (Platform Controller Hub)，它包含了 PCIe、USB、SATA 等控制器。
+
+I/O 的动作参数：
+- 数据粒度：字节 vs. 块
+- 访问模式：顺序 vs. 随机
+- 传输机制：programmed I/O vs. DMA
+
+Programmed I/O：
+- CPU 直接控制 I/O 设备和内存之间传输
+- 硬件实现简单，容易编程
+- 传输消耗 CPU 时钟周期
+
+DMA（Direct Memory Access）：
+- 控制器直接控制 I/O 设备和内存之间传输
+- CPU 只需设置 DMA 控制器
+- DMA 控制器可以在 CPU 执行其他任务时传输数据
+- DMA 控制器可以在传输完成后中断 CPU，通知传输完成
+
+I/O 设备通知 OS 的方法：  
+- I/O 中断
+  - 设备生成中断来通知 OS
+  - 容易处理不可预测的事件
+  - 中断处理开销大
+- Polling】
+  - OS 定期轮询设备的状态寄存器
+  - 开销小
+  - 轮询不频繁/不可预测的 I/O 事件浪费很多 CPU 时钟周期
+- 实际设备可能结合两种方式，例如网卡用中断处理第一个到达的包，然后用轮询处理后续包。
+
+Device driver：
+- 内核中设备相关的代码，负责直接与设备通信
+- 可以分成两部分
+  - Top half：实现 `open`、`close`、`read`、`write` 等系统调用，开始 I/O 操作，可能使线程休眠
+  - Bottom half：作为中断处理程序运行，处理传输，I/O 完成时可能唤醒线程
+
+I/O subsystem：
+- 提供 I/O 设备访问的统一接口
+- 块设备：`read`、`write`、`open`、`close`
+- 字符设备：`get`、`put`
+- 网络设备：socket API
+- Timing：
+  - Blocking 接口：调用后线程阻塞，直到操作完成
+  - Non-blocking 接口：立即返回成功读或写的字节数，不阻塞线程
+  - Asynchronous 接口：调用后线程继续执行，I/O 完成时通知用户
+
+### Hard Disk Devices (HDDs)
+
+磁盘：
+- 非易失性存储设备
+- 大容量，低价格
+- 块级别随机访问
+- 随机访问性能差，顺序访问性能好
+
+硬盘结构：
+- 传输单元：扇区（sector）
+  - 盘片（surface）上连续的一圈扇区：磁道（track）
+  - 堆叠的磁道：柱面（cylinder）
+  - 磁头（head）在柱面上移动，读取或写入数据
+- 扇区之间被不使用的 guard 区域分隔，减少写操作污染相邻磁道的概率
+- 只有最外一圈的磁道被使用
+  
+Shingled Magnetic Recording (SMR)：
+- 磁道重叠写入，增加存储密度
+
+读写操作需要三个阶段：
+- 寻道时间（seek time）：磁头移动到目标磁道
+- 旋转延迟（rotational latency）：等待目标扇区转到磁头下方
+- 传输时间（transfer time）：传输扇区数据
+
+$$\text{Disk Latency} = \text{Queueing Time} + \text{Controller time} + \text{Seek Time} + \text{Rotational Latency} + \text{Transfer Time}$$
+
+磁盘性能算例：
+- 忽略 queueing time 和 controller time
+- 平均寻道时间 $5 ms$
+- 转速 $7200 rpm$，转一圈的旋转延迟 $60000 / 7200 = 8.33 ms$，平均旋转延迟 $8.33 / 2 = 4.17 ms$
+- 传送速率 $50 MB/s$，每个扇区 $4 KB$，一个扇区的传输时间 $4 / 50000 = 0.08 ms$
+- 读磁盘上一个随机扇区的延迟：$5 + 4.17 + 0.08 = 9.25 ms$
+- 若在同一个柱面上读，则不需要寻道时间
+- 读下一个相邻扇区则只需要传送时间
+- 寻道时间和旋转延迟是随机访问的主要开销
+
+磁盘控制器有许多精巧设计：
+- 扇区有精密的纠错机制
+- Sector sparing：透明地将坏扇区重新映射到同一个盘面上的空闲扇区
+- Slip sparing：重新映射所有扇区，以便保持顺序访问的行为
+- Track skewing：不同磁道的扇区编号不同，顺序访问时将**寻道与旋转重叠**，消除访问下一个磁道时的旋转延迟
+
+### Solid State Drives (SSDs)
+
+闪存：
+- 非易失性存储设备
+- 块级别随机访问
+- 读性能好，随机写性能差
+- 只能整块擦除
+- 写入次数越多，寿命越短
+
+SSD：
+- 没有寻道和旋转延迟
+- 没有运动的部件：轻、能耗低、静音、抗冲击
+- 寿命有限
+- 读写性能不一致
+- 顺序读和随机读的带宽都很高
+
+写操作比较复杂
+- 只能写块中的空页
+- 控制器维护一个空块的资源池，预留一定空间
+- 写比读慢十倍，擦除比写慢十倍
+- 可以一次性读写一个 chunk（4 KB）
+- 但一次性只能覆写整个 256 KB 的块
+  - 擦除操作很慢
+  - 每个块寿命有限，只能擦除约一万次
+  - 我们不想覆写或擦除整个块
+
+解决方法：
+- Layer of Indirection：
+  - 维护一个 Flash Translation Layer (FTL)，将逻辑块号（OS 看到的）映射到物理块号（flash memory controller 看到的）
+  - 可以自由地重新映射数据，而不影响 OS
+- Copy on Write:
+  - OS 更新数据时，不重写已有的页，而是将新数据写入空页
+  - 更新 FTL 映射，将逻辑块号映射到新物理块号
+- 从而：
+  - 小的写操作不需要擦除和重写整个块
+  - SSD 控制器可以在块之间分散负载，延长寿命
+  - 旧版本的页被 GC，擦除后加入空闲块池
 
