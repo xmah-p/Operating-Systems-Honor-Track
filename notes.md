@@ -7,7 +7,6 @@
       - [High-level File API: Streams](#high-level-file-api-streams)
       - [Low-level File API: File Descriptors](#low-level-file-api-file-descriptors)
       - [How and Why of High-level File I/O](#how-and-why-of-high-level-file-io)
-      - [Process State for File Descriptors](#process-state-for-file-descriptors)
       - [Pitfalls with OS Abstractions](#pitfalls-with-os-abstractions)
     - [IPC, Pipes and Sockets](#ipc-pipes-and-sockets)
       - [Pipe](#pipe)
@@ -49,6 +48,11 @@
   - [I/O](#io)
     - [Hard Disk Devices (HDDs)](#hard-disk-devices-hdds)
     - [Solid State Drives (SSDs)](#solid-state-drives-ssds)
+    - [I/O Performance](#io-performance)
+      - [Queuing Theory](#queuing-theory)
+  - [File Systems](#file-systems)
+    - [File System Design](#file-system-design)
+    - [Case Study: File Allocation Table (FAT)](#case-study-file-allocation-table-fat)
 
 
 # Operating Systems
@@ -276,7 +280,7 @@ Unix I/O 设计思想：
 #include <sys/types.h>
 
 // 系统调用
-// open 系统调用返回 open file descriptor，或 < 0 的错误码
+// open 系统调用返回 open-file descriptor，或 < 0 的错误码
 int open(const char* path, int flags, mode_t mode);
 int creat(const char* path, mode_t mode);    
 int close(int fd);
@@ -349,20 +353,6 @@ Buffer in userspace:
 - 系统调用开销很大：byte by byte 的读写，吞吐量仅为 10 MB/s，但 `fgetc` 可以匹配 SSD 的速度
 - 系统调用功能简单
   - 没有“读直到换行”
-
-#### Process State for File Descriptors
-
-`open` 系统调用返回一个 file descriptor（`int`），并在内核创建一个 open file description，其中包含文件在磁盘上的位置、当前文件位置等。
-
-`fork` 时，子进程会继承父进程的 file descriptor 和 open file description（后者被 aliased, 即共享, 并不创建新的 open file description）。当所有进程的 file descriptor 都被 `close` 时，open file description 才会被释放。  
-- 文件位置也会共享
-- 但如果子进程调用 `open`，则会创建新的 open file description，文件位置不会和父进程共享。
-
-这便于进程间的资源共享：  
-- 一切皆文件，这使得文件、网络连接、终端、管道等都可以在父子进程间共享
-
-重定向：`dup` 和 `dup2`  
-- 创建一个新的 file descriptor，指向**同一个** open file description
 
 #### Pitfalls with OS Abstractions
 
@@ -2634,4 +2624,239 @@ SSD：
   - 小的写操作不需要擦除和重写整个块
   - SSD 控制器可以在块之间分散负载，延长寿命
   - 旧版本的页被 GC，擦除后加入空闲块池
+
+### I/O Performance
+
+性能指标：
+- 响应时间（response time）/延迟（latency）：完成一个 operation 的时间
+- 带宽（bandwidth）/吞吐量（throughput）：operation 完成的速率
+
+I/O 性能的影响因素：
+- 软件路径（队列）
+- 硬件控制器
+- I/O 设备服务时间
+
+#### Queuing Theory
+
+假设 arrival time 固定为 $T_A$，service time 固定为 $T_S$。则 arrival rate 为 $\lambda = 1 / T_A$，service rate 为 $\mu = 1 / T_S$。
+
+利用率 utilization $U = \lambda / \mu = T_S / T_A$, 其中 $\lambda \leq \mu$。
+
+随着 offered load $T_S/T_A$ 的增加，吞吐量也线性增加，而 queuing delay 始终为零（没有形成队列）。直到 $T_S/T_A$ 达到 1，此时到达时间恰好等于服务时间，队列恰好开始形成，吞吐量饱和。此后 $T_S/T_A$ 增加，吞吐量不再增加，queuing delay 线性增加（没有上界）。
+
+如果请求以 burst 的形式到达，尽管平均 arrival time 不变，平均利用率很低，但 queuing delay 也可能很高。
+
+指数分布：
+- PDF: $f(x) = \lambda e^{-\lambda x}$
+- CDF: $F(x) = 1 - e^{-\lambda x}$
+- 指数分布刻画的是一个发生概率关于时间均匀分布的随机事件，连续两次发生的时间间隔
+- 指数分布具有无记忆性：
+  - $P(X > s + t | X > s) = P(X > t)$
+  - 即过去的时间不会影响未来的概率分布
+- 数学期望：
+  - $E(X) = 1 / \lambda$
+  - 即单位时间内期望发生 $\lambda$ 次事件
+
+随机分布的数字特征：
+- 均值：$E(X) = \sum p(x) \cdot x$
+- 方差：$Var(X) = E(X^2) - E^2(X)$
+- Squared Coefficient of Variation (SCV)：$SCV = Var(X) / E^2(X)$
+  - SCV = 1 时，分布是指数分布
+  - SCV = 0 时，分布是常数分布
+  - 磁盘响应时间的 SCV 约为 $1.5$，大多数响应时间小于均值
+
+Queuing theory：
+- 假设：
+  - arrival rate 等于 departure rate（系统处于均衡）
+    - departure rate 不可能超过 arrival rate
+    - 如果 arrival rate 大于 departure rate，则系统过载，队列无限增长
+  - Arrival 和 departure 都可以用概率分布表示
+  - 队列长度无限制
+  - 不同的到达独立、无记忆
+- 参变量：
+  - $\lambda$：平均 arrival rate
+    - $T_{arr}$：平均 arrival time，$\lambda = 1 / T_{arr}$
+  - $T_{ser}$：平均 service time
+    - $\mu$：service rate，$\mu = 1 / T_{ser}$
+  - $C$：squared coefficient of variation (SCV)，即服务时间的方差除以服务时间的期望的平方
+  - $u$：利用率，$u = \frac{T_{ser}}{T_{arr}} = \lambda \cdot T_{ser}, 0\leq u \leq 1$
+- 我们希望计算的变量
+  - $T_{q}$：queuing delay
+    - 总延迟 $T = T_{ser} + T_{q}$
+  - $L_{q}$：队列长度, $L_{q} = \lambda \cdot T_{q}$（Little's Law）
+    - 水库水量等于进水速率乘水停留的时间
+    - 假设系统运行 $T$ 时间，则 $T_{q} = \frac{L_q T}{\lambda T}$（平均 queuing delay 等于所有顾客在队列中等待的时间除以顾客数）
+- 结论
+  - M/M/1 队列（到达和服务时间都服从指数分布，单个服务器）：
+    - $T_{q} = T_{ser} \cdot \frac{u}{1 - u}$
+  - M/G/1 队列（到达时间服从指数分布，服务时间服从任意分布，单个服务器）：
+    - $T_{q} = T_{ser} \cdot \frac{1}{2} (1 + C) \cdot \frac{u}{1 - u}$
+    - 代入 $C = 1$ 就得到上面的结果
+
+算例：磁盘 I/O
+- 用户发射请求的速率：$\lambda = 10 \times 8\text{KB/s}$
+- 请求和服务时间服从指数分布（$C=1$）
+- 平均服务时间 $T_{ser} = 20\text{ms}$
+- 磁盘利用率为 $u = \frac{T_{ser}}{T_{arr}} = 20\text{ms} \times 10 \text{/s}= 20%$
+- 平均 queuing delay $T_{q} = T_{ser} \cdot \frac{u}{1 - u} = 20\text{ms} \cdot \frac{0.2}{0.8} = 5\text{ms}$
+- 队列长度 $L_{q} = \lambda \cdot T_{q} = 10 \text{/s} \cdot 5\text{ms} = 0.05$ 个请求
+- 总延迟 $T = T_{ser} + T_{q} = 20\text{ms} + 5\text{ms} = 25\text{ms}$
+
+如何提高 I/O 性能？
+- Speed：make everything faster
+- 并行：更解耦的系统（多条独立的总线/控制器）
+- 优化性能瓶颈
+- 利用队列：
+  - 队列可以吸收突发负载，平滑化流
+  - admission control：有限长度队列
+    - 限制了延迟，但引入了不公平和活锁
+
+磁盘性能最高的时候：
+- 大的顺序访问
+- 很多的访问以至于它们可以被 piggybacked（reorder 队列，使同一个磁道上的请求连续）
+- bursts 既是挑战（队列变长、延迟增加）也是机遇（piggyback 和 batching（一次上下文切换处理多个请求））
+
+Disk scheduling：
+- FIFO: 对请求方公平，但不能很好地 piggyback
+- SSTF (Shortest Seek Time First):  
+  - 优先处理离磁头最近的请求
+  - 虽然叫 SSTF，但旋转时间也需要考虑在内
+  - 可能导致 starvation
+- SCAN：
+  - 类似 Elevator algorithm
+  - 在磁头移动方向上的最近请求优先
+  - 从外侧扫描到内侧，然后再从内侧扫描到外侧
+  - 没有 starvation
+- C-SCAN（Circular SCAN）：
+  - 磁头从外侧扫描到内侧，然后直接跳到外侧继续扫描
+  - 保证了每个请求都能被处理
+  - 比 SCAN 更公平，不偏心中间的磁道
+
+Network I/O：
+- 和 disk I/O 类似
+- 提高 network I/O 性能
+  - 分布式应用
+  - 优化 TCP/IP 协议栈
+  - kernel bypass
+    - 用户空间的网络协议栈
+    - offload to NIC
+
+I/O 系统的栈结构：
+- 应用程序
+- High-level I/O
+- Low-level I/O：文件描述符
+- System Calls
+- File System
+- I/O Drivers
+- Hardwares
+
+## File Systems
+
+I/O 系统的栈结构中，文件系统是中间的支柱，为 I/O API 和系统调用提供了硬件设备的一层抽象。
+- I/O API 和系统调用
+  - Variable-size buffer
+  - 内存地址索引
+- 文件系统
+  - 块（block）
+  - 逻辑索引，典型粒度为 4 KB
+- 硬件设备
+  - HDD：
+    - 512 B 或 4 KB 大小的扇区
+  - SSD：
+    - Flash translation layer（FTL）
+    - Physical block，通常 4 KB 大小
+    - Erasure page
+
+**文件系统**：OS 中将硬盘等设备的块接口转换为文件、目录等的 layer
+- 经典 OS 情形：受限的硬件接口（array of blocks）被转换为有如下性质的接口
+  - Naming：可以通过名字查找文件
+  - Organization：文件可以组织成目录树，并被映射到物理块
+  - Protection：权限控制
+  - Reliability：在发生系统崩溃或硬件失败时，保持文件完整性
+
+文件的不同视角：
+- 用户视角：durable 的数据结构
+- 系统视角（系统调用）：字节集合（UNIX）
+- 系统视角（OS 内）：块集合
+  - 块是逻辑传输单元，不同于扇区（物理传输单元）
+  - 块大小大于或等于扇区大小
+
+**文件**：一组顺序存放在逻辑空间中的用户可见的块
+- 大多数文件很小
+- 大多数字节被包含在大文件中
+
+目录：
+- 目录是特殊的文件，它包含其下文件名到 file number 的映射
+  - file number 对应的可以是文件，也可以是另一个目录
+  - 每一条文件名到 file number 的映射称为目录项（directory entry）
+- 进程不能直接访问目录的 raw bytes，`read` 系统调用在目录上不 work。`readdir` 可以遍历目录项，但不向进程暴露其 raw bytes
+  - 因为不能让进程修改目录中的映射
+- `open`、`creat` 会遍历目录结构体，`mkdir`、`rmdir` 会添加或删除目录项。
+- 解析 `/my/book` 的过程：
+  - 读根目录的文件头（它在磁盘上的固定位置）
+  - 读根目录的第一个数据块，线性地搜索 `my` 目录项
+  - 找到 `my` 目录项后，读 `my` 目录的文件头
+  - 读 `my` 目录的第一个数据块，线性地搜索 `book` 目录项
+  - 找到 `book` 目录项后，读 `book` 目录的文件头
+- 当前工作目录（current working directory）：Per-address-space 的指向当前工作目录的指针，用于文件名解析，使用户可以使用相对路径名
+
+磁盘管理：
+- 磁盘就是扇区的数组
+- Logical Block Addressing (LBA) 
+  - 每个扇区有一个整数的逻辑块地址（LBA）
+  - 控制器将 LBA 翻译为物理位置
+
+文件系统需要：
+- 知道哪些块包含哪些文件的数据
+- 知道目录中有哪些文件
+- 知道哪些块是空闲的
+- 这些信息都存在磁盘上
+
+### File System Design
+
+文件系统设计的重要因素：
+- 磁盘性能（重要）
+  - 最大化顺序访问，减少寻道
+- read/write 前 open
+  - 权限检查，提前查找文件资源
+- 文件使用时，大小固定
+  - write 可以扩展文件大小
+- 组织为目录树
+- 块的 allocation 和 free 保证高性能
+
+文件系统的组件：
+- 通过文件路径在目录结构体中查找文件 inumber
+- 通过 inumber 对应的文件头结构体（inode）找到文件对应的块
+- 进程的 open fild descriptor 表其实就是把 fd 映射到 inumber
+- `open` 负责 name resolution，将路径名翻译成 inumber
+- `read` 和 `write` 都利用 inumber 进行
+- 四个组件：
+  - 目录
+  - index 结构体
+  - storage blocks
+  - free space map
+
+Linux 中的两个 open-file table：
+- Per-process open-file table：每个进程独有，位于 PCB 中，将文件描述符（fd）映射到 system-wide file table 的条目
+  - 不同进程的相同 fd 无关，不一定指向同一个文件
+  - 0、1、2 分别指向标准输入、标准输出、标准错误
+- System-wide open-file table：所有进程共享的内核全局数据结构，包含当前文件偏移、访问模式（O_RDONLY、O_WRONLY、O_RDWR）、状态标志（O_APPEND、O_NONBLOCK）、引用计数和指向 inode/vnode 的指针
+  - **每个 `open` 系统调用都会在 system-wide open-file table 中创建一个条目**
+- 例子
+  - 进程先打开文件，然后调用 `fork` 创建子进程，则
+    - 子进程获得父进程 open-file table 的完整副本，父子进程的对应 fd 指向同一个 system-wide open-file table 条目，该条目的引用计数增加
+    - **父子进程共享文件偏移量**
+  - 进程先 `fork` 创建子进程，然后分别打开同一文件，则
+    - 两个独立的 system-wide open-file table 条目被创建，父子进程的对应 fd 指向不同的条目
+    - **父子进程的文件偏移量独立**
+    - 写入结果取决于内核调度，可能交替写入，若未用 `O_APPEND`，则可能互相覆盖
+  - `int dup(int oldfd)`：在 per-process open-file table 中新增条目，指向 oldfd 对应的 system-wide open-file table 条目
+    - 返回的新 fd 是 oldfd 的副本
+    - 对应的 system-wide open-file table 条目的引用计数增加
+    - **新 fd 和 oldfd 共享文件偏移量**
+  - `int dup2(int oldfd, int newfd)`：将 newfd 指向 oldfd 对应的 system-wide open-file table 条目，若 newfd 已经打开，则先关闭它
+    - oldfd 对应的 system-wide open-file table 条目的引用计数增加
+    - newfd 对应的 system-wide open-file table 条目的引用计数减少（若 newfd 已经打开）
+
+### Case Study: File Allocation Table (FAT)
 
