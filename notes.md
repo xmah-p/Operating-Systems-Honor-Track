@@ -53,6 +53,12 @@
   - [File Systems](#file-systems)
     - [File System Design](#file-system-design)
     - [Case Study: File Allocation Table (FAT)](#case-study-file-allocation-table-fat)
+    - [Case Study: Unix File System](#case-study-unix-file-system)
+    - [Case Study: New Technology File System (NTFS)](#case-study-new-technology-file-system-ntfs)
+    - [Buffer Cache](#buffer-cache)
+    - [Durable File Systems](#durable-file-systems)
+    - [Reliable File Systems](#reliable-file-systems)
+    - [Distributed Systems](#distributed-systems)
 
 
 # Operating Systems
@@ -2833,7 +2839,7 @@ I/O 系统的栈结构中，文件系统是中间的支柱，为 I/O API 和系�
 - 四个组件：
   - 目录
   - index 结构体
-  - storage blocks
+  - 数据块
   - free space map
 
 Linux 中的两个 open-file table：
@@ -2859,4 +2865,459 @@ Linux 中的两个 open-file table：
     - newfd 对应的 system-wide open-file table 条目的引用计数减少（若 newfd 已经打开）
 
 ### Case Study: File Allocation Table (FAT)
+
+FAT：
+- 假设已经有目录结构体（可以将路径名解析为 file number）
+- Disk storage 被组织为一个有 $N$ 个块的数组
+- FAT 是一个有 $N$ 个表项的数组，表项存储每个块的状态，负责 file number 到块的映射
+- 一个文件的所有块对应的 FAT 表项被组织成一个链表
+  - 链表的首元素（root block）的索引就是 file number
+  - 一个文件不一定被映射到连续的块
+- file_read $31, \langle 2, x \rangle$：FAT 中索引为 $31$ 的表项为链表头，此链表的索引为 $2$ 的块中的索引为 $x$ 的字节
+- 文件偏移：文件块号（即该文件对应的块链表中对应块的索引）和块内偏移量
+- 未使用的块被标记为空闲（free）
+  - 扫描空闲块，或者维护 free list
+- FAT 被存储在硬盘上（需要被持久性地保存，不能存在 RAM 里）
+- 格式化：清零所有块，将所有 FAT 表项标记为 free
+- 快速格式化：只将所有 FAT 表项标记为 free
+
+FAT 目录
+- 目录是一个特殊的文件，它被组织成一个目录项（文件名到 file number 的映射）的链表
+- 目录中有空闲的空间用于添加新的目录项
+- FAT 中，文件的 attribute 被存储在目录中，而不是在文件自己里
+- 根目录被存在硬盘上一个指定位置（FAT 中为 block 2，FAT 没有 block 0 和 block 1）
+
+讨论：
+- 给定 file number 找到对应的块的时间：找第一个块 $O(1)$，找其他的块 $O(N)$，其中 $N$ 是文件块的个数
+- 不对文件的 block layout 做保证，即不一定连续存储
+- 顺序访问性能：由于文件不一定连续存储，性能没有保证
+- 随机访问性能：需要遍历 FAT 链表才能找到对应块，性能较差
+- 碎片化：没有碎片
+- 小文件友好
+- 大文件不友好：不一定连续存储，随机访问性能差
+
+### Case Study: Unix File System
+
+Inode：
+- File number（inumber）是 inode 数组的索引
+- 每个 inode 对应一个文件，包含其元数据
+  - 文件元数据和文件本身关联，而不是像 FAT 那样存储在目录中
+- Inode 通过一个多级树结构组织文件对应的块：
+  - 12 个直接指针，每个直接指向一个 4 KB 块，共可索引 48 KB 数据
+  - 1 个一级间接指针，指向一个包含 1024 个指针的块（一个指针大小 4 字节），每个指针指向一个 4 KB 块，共可索引 4 MB 数据
+  - 1 个二级间接指针，指向一个包含 1024 个一级间接指针的块，共可索引 4 GB 数据
+  - 1 个三级间接指针，指向一个包含 1024 个二级间接指针的块，共可索引 4 TB 数据
+- 访问 block 23 需要两次磁盘访问：
+  - 第一次通过一级间接指针访问指针块
+  - 第二次通过指针块访问 block 23
+
+Berkeley Fast File System (FFS)：
+- 早期 Unix 和 DOS/Windows FAT 文件系统中，文件头（inode）被存放在最外层柱面（cylinder），且大小固定。这带来许多问题
+  - 所有 inode 都在一个篮子，一次 head crush 可能损坏所有文件
+  - inode 和对应的文件距离很远，导致不必要的寻道
+  - 创建文件时不知道它将会有多大（unix 大多数写入都是追加），无法确定分配多少连续空间
+- 解决方法：Block Groups
+  - 盘面被分为多个 block group，每个 block group 包含
+    - 特定目录的数据块
+    - free space bitmap
+    - inode 数组
+  - 为文件分配新块时采用 first-fit 策略
+    - 小文件会填补 free space bitmap 前部的小洞
+    - 而大文件能在 bitmap 后部找到大块连续空间
+  - 每个 block group 保持至少 10% 的空余空间
+- FFS inode 布局的优点：
+  - 小目录的数据和文件头可以在同一个柱面，减少寻道
+  - 文件头比块小很多（几百字节），一次性能取出多个文件头
+  - 可靠性：磁盘不会一损俱损
+
+旋转延迟问题：
+- 读一个扇区 -> 处理 -> 读下一个扇区
+  - 在处理的同时，磁盘旋转过了下一个扇区，导致连续读取时一直错位，旋转延迟很高
+- 解决方法一：skip sector positioning
+  - 将文件隔块存储
+  - 可以由 OS 或现代磁盘控制器实现
+- 解决方法二：read-ahead
+  - 预读下一个扇区
+  - 可以由 OS 或现代磁盘控制器（带 RAM 作为缓冲区）实现
+
+Unix 4.2 BSD FFS：
+- 优点
+  - 大文件和小文件都可以高校存储
+  - 大文件和小文件都有较好的局部性（连续存储）
+  - 文件头和文件数据之间也有较好的局部性
+  - 不需要去碎片化
+- 缺点
+  - 很小的文件效率不高（单字节的文件也需要 inode 和一个数据块，一共占用两个块）
+  - 对连续存储的文件来说，inode 编码不够高效（每个数据块都需要一个指针，但一组连续块只需要一个指针）
+  - 需要保留 10~20% 的空闲空间以防止碎片化
+
+硬链接（hard link）：
+- 将文件名映射到目录结构体中的文件号
+- 当文件被创建时，第一个硬链接同时被创建
+- `link` 和 `unlink` 系统调用可以创建和删除硬链接
+- inode 维护引用计数，追踪文件被多少硬链接引用。当引用计数为 0 时，文件被删除
+
+软链接/符号链接（soft link, symbolic link）：
+- 普通目录项将文件名映射到 file number
+- 符号链接目录项将文件名映射到另一个文件名
+- 如果目标路径不存在，则为悬空链接（dangling link）
+- 通过 `symlink` 系统调用创建符号链接
+
+目录查找：打开 `/home/pkuos/stuff.txt`
+- 根目录的 inumber 在内核中写死，假设为 2
+- 读 inode 2 的数据块，根据其直接和间接指针找到根目录所在的数据块
+- 读入根目录数据块，线性搜索 `home` 目录项，找到其 inumber
+- 最终找到 `stuff.txt` 的 inumber，读入对应 inode 的数据块
+- 设置 inode 对应的 file description（per-process open-file table），使 read/write 可以访问文件数据
+- **检查最后一个 inode 以及所有目录 inode 的权限**
+
+大目录：
+- 早期文件系统将目录组织成链表或数组
+  - 线性查找目录项，效率低
+  - 找一个文件需要遍历整个目录
+- B 树
+  - 文件名的哈希作为 B 树的键
+
+### Case Study: New Technology File System (NTFS)
+
+NTFS：
+- 现代 Windows 的默认文件系统
+- 变长的 extent，而不是固定大小的 block
+- Master File Table（MFT）：
+  - 对应 FAT 或 inode array
+  - 每个表项最大 1 KB，对应一个文件或目录
+
+MFT 表项：
+- 四个部分：
+  - Standard Information（SI）：文件的元数据，如创建时间、修改时间、权限
+  - File Name（FN）
+  - Data Attribute（DA）：文件数据，以键值对的形式存储
+  - 空闲空间
+- 小文件：数据直接存放在 data attribute 中
+- 中等大小的文件：存 extent 的指针（start 和 length）
+- 大文件：存指向 MFT 表项的指针（相当于间接指针）和指向 extent 的指针
+- 超大文件：存装有 MFT 表项的 extent 的指针（相当于二级间接指针）和其他指针
+
+NTFS 目录：
+- 实现为 B 树
+- 文件号指明了文件在 MFT 中的表项索引
+- MFT 表项包含文件名
+- 硬链接：MFT 表项中包含多个文件名
+
+### Buffer Cache
+
+Buffer cache：
+- System-wide
+- 内核需要将硬盘块拷贝到主存中，才能读写其内容
+- 被缓存的是文件系统中的四个组件
+  - 数据块
+  - inode
+  - 目录的数据块
+  - free space map
+- `open`：
+  - 先在目录中查找文件名，找到对应的 inode（这些目录数据块就顺便被缓存了）
+  - 读 inode，在 PCB 中创建一个 file descriptor，指向 inode（inode 块也被缓存）
+- `read`
+  - 在 PCB 中根据 fd 找到 inode
+  - 根据 inode 中的直接和间接指针找到数据块
+  - 读入数据块到对应 buffer（数据块顺便被缓存到 buffer cache）
+- `write`
+  - 在 PCB 中根据 fd 找到 inode
+  - 根据 inode 中的直接和间接指针找到数据块
+  - 将数据块缓存到 buffer cache 并写入，这个过程也可能更新 free space map 和 inode（分配新块）
+    - 被修改的块会被标记为 dirty
+- buffer cache 完全由 OS 软件实现
+- 块换入换出缓存不是原子操作
+- 替换策略
+  - LRU：完整 LRU 实现的开销是可承担的
+    - 优点：只要内存装得下工作集，综合性能很好
+    - 缺点：当应用扫描整个文件系统时，不断缓存一次性文件
+  - 有的系统可以让应用选择替换策略
+  - Use Once 策略：块被访问之后就被丢弃
+- Cache size：
+  - 物理内存既要给 buffer cache 用，也要给虚拟内存用
+  - buffer cache 太大影响多任务能力
+  - 太小又导致磁盘 I/O 过多（装不下工作集，频繁换入换出）
+  - 解决方法：动态调整 buffer cache 大小以求平衡
+
+文件系统预取
+- Read Ahead Prefetching：
+  - 大多数文件访问都是顺序的：预取当前读请求的块后续的块
+  - 电梯算法可以高效地交错并发应用的预取
+- 预取太多：其他应用的磁盘请求的延迟增加
+- 预取太少：并发文件请求中，磁盘寻道和旋转延迟增加
+
+Delayed Writes：Buffer cache 是一个写回（write-back）缓存，它会将写操作推迟到数据块被换出时：
+- Buffer cache 满，数据块被驱逐
+- Buffer cache 周期性 flush（预防崩溃数据丢失）
+- delayed writes 的优点：
+  - `write` 系统调用快速返回用户，不需要等待磁盘 I/O 完成
+  - 磁盘调度器可以对写请求重新排序，以提高性能（电梯算法）
+  - 推迟块分配，一次性分配多个块，更容易使块连续，减少碎片化
+  - 如果只是临时文件，可以避免不必要的磁盘 I/O
+
+对比 buffer cache 与 demand paging：
+- LRU 开销对 demand paging 来说太大，只能用近似算法替代；但 buffer cache 可以使用完整 LRU
+- Demand paging 在内存接近满时驱逐，buffer cache 除此之外还会周期性 flush，以最小化崩溃时的数据丢失
+
+### Durable File Systems
+
+系统崩溃时，buffer cache 中的脏块会丢失。如果它恰好是目录的数据块，则会导致该目录下文件的 inode 指针丢失：文件系统状态错误，且内存泄漏！
+
+重要的 "ilities"：
+- Availability：系统可以接受并处理请求的概率，以 9 来衡量
+  - 99.9% 概率是“3-nines of availability”
+  - 独立于 failure
+- Durability：系统从 fault 中恢复数据的能力
+  - fault tolerance
+  - 先前存储的数据能够被重新取得，无论 failure 是否发生
+- Reliability：系统或组件能在给定条件下持续按要求工作指定时间的能力
+  - 一般比 availability 更强，也包括 security、fault tolerance/durability
+
+让文件系统 durable：
+- 磁盘块包含 Reed-Solomon 纠错码（Error Correction Code, ECC），从小的磁盘缺陷中恢复数据
+- 确保写操作短期内有效
+  - 放弃 delayed writes
+  - 为 buffer cache 中的脏块采用 battery-backed RAM（non-volatile RAM or NVRAM）
+- 确保写操作长期有效
+  - 备份在磁盘其他位置/其他磁盘/其他服务器/其他大陆/...
+
+RAID（Redundant Array of Inexpensive Disks）：
+- 目标：可靠、性能、容量
+- 虚拟化存储：多个物理磁盘被抽象为一个逻辑磁盘
+- RAID 1：Disk mirroring/shadowing
+  - 每个磁盘都有一个“影子”
+  - 写入时同时写入两个磁盘：写带宽减半
+  - 读时可以从任意一个磁盘读取
+  - 数据恢复：
+    - 换用影子磁盘，将数据复制到另一块磁盘
+    - hot spare：预留备胎磁盘以供替换
+  - 适合高 I/O、高可用性环境
+  - 最昂贵：100% 容量开销
+- RAID 5：High I/O Rate Parity
+  - 数据被分割成 $4$ 个块，分布在多个磁盘上（$D_0$ 在磁盘 $0$，$D_1$ 在磁盘 $1$，...，$P_0$ 在磁盘 $4$）
+  - 奇偶校验块：$P_0 = D_0 \oplus D_1 \oplus D_2 \oplus ...$
+    - 因为异或就是模 $2$ 的加法
+  - 摧毁任一磁盘，仍可恢复完整数据
+  - 可以将磁盘放在一起，也可以放在不同地方，用 Internet 连接（防止整个屋子发洪水把磁盘泡了）
+- RAID 6 and other Erasure Codes
+  - RAIDX 是一个 erasure code
+    - 必须知道哪个磁盘坏了
+  - 现在磁盘太大，以至于恢复磁盘的过程中可能又会有磁盘损坏
+    - RAID 6 可容忍两个磁盘损坏
+  - 更通用方法：Reed-Solomin codes
+    - $m$ 个数据块，$n - m$ 个校验块
+    - 可以容忍 $n - m$ 个磁盘损坏
+  - 例如，将数据分为 $m = 4$ 块，总共生成 $n = 16$ 块，分布在世界各处。则任意 $4$ 块都可以恢复数据，非常 durable
+- 非常 durable
+- 读的可用性好
+- 写的可用性差：必须写到所有备份
+
+### Reliable File Systems
+
+RAID 可以防护磁盘物理损坏，但不能防护软件错误：
+- 写入错误数据
+- 部分磁盘未写入
+- 静默数据损坏（bit rot）
+
+Reliability 问题
+-  单个文件操作可能涉及多个物理磁盘块：
+  - inode、间接指针的磁盘块、free space map、数据块
+  - 扇区重映射
+  - 但在物理层面，操作是原子的
+- 但在物理层面，操作是原子的
+- 一系列物理操作过程中间的崩溃或断电可能使系统处于不一致状态
+- 例如，银行转账时，在取出钱和存入钱之间发生了断电，导致钱丢失
+
+两种解决方法：
+- Careful Ordering and Recovery
+- Versioning and Copy-on-Write
+
+Careful Ordering
+- 以特定顺序执行文件系统操作，使得操作序列可以被安全地打断
+  - 分配数据块 => 令 inode 指向数据块 => 更新 free space map => 更新目录
+  - **先写数据，再更新目录项**，否则无法发现是否被打断
+- 崩溃后恢复：
+  - 读取数据结构以检查是否有未完成的操作
+  - 清理/完成
+- 应用
+  - FAT 和 FFS (fsck)
+  - Word, emacs 自动保存
+- Berkeley FFS: 创建文件
+  1. 分配数据块
+  2. 写数据块
+  3. 分配 inode
+  4. 写 inode 块
+  5. 更新 free block bitmap（数据块和 inode 块从空闲变为在使用）
+  6. 更新目录项
+  7. 更新目录修改时间
+- Berkeley FFS: 恢复
+  1. 扫描 inode 表
+  2. 如果发现未连接文件（不在任何目录），删除或移入 lost+found 目录
+  3. 对比 free block bitmap 和 inode 树
+  4. 扫描目录查找丢失的更新/访问时间
+- 问题：扫描时间复杂度和磁盘大小成正比
+
+Copy-on-Write
+- 不覆写已有的数据块并更新 inode，而是 Copy-on-Write 更新数据所在的块，并通过指针复用旧版本未修改的块
+- 所有修改完成后，单次指针切换更新根节点：原子操作
+- 看似昂贵，但
+  - 可以 batch 更新
+  - 几乎所有写请求都可以并行
+  - 追加式的写天然是顺序的
+- 应用
+  - NetApp 的 WAFL（Write Anywhere File Layout）
+  - ZFS, OpenZFS
+- ZFS 和 OpenZFS
+  - 块大小可变，从 512 B 到 128 KB
+  - 对称树：拷贝操作发起时即知文件大小
+  - 版本号和指针存在一起
+  - buffer 写操作
+  - 空闲空间表示为每个 block group 中的 extent 树
+    - 维护一个日志，延迟更新，直到 block group 被激活时
+
+更通用的 reliability 解决方法：
+- 用事务（transaction）完成原子操作
+  - 保证单个文件操作的一系列连续子操作能原子地完成
+  - 如果中途崩溃，文件系统的状态只有两种可能：
+    - 完成了所有子操作
+    - 没有完成任何子操作
+  - 大部分文件系统和应用都有应用
+- 为媒介 failure 提供冗余：媒介上的冗余表示（ECC）、跨媒介的备份（RAID）
+
+事务
+- 事务是将系统从一个一致状态转变为另一个一致状态的原子性的读写序列
+  - 相当于同步中的临界区
+  - FFS 也可以理解为事务的一种
+- 典型结构：将一系列更新封装为一个事务
+  - Begin Transaction：获得事务 ID
+  - 一系列更新，发生失败则回滚
+  - Commit Transaction：将所有更新写入磁盘
+- 日志（log）
+  - 写日志是原子操作
+  - 追加式写入
+    - 不可变性和事件发生的顺序性
+  - Seal the commitment：事务完成时写入日志
+  - 日志数据强制写入磁盘（或 NVRAM），日志自身不能丢失
+- Journaled 文件系统和 Log structured 文件系统的区别
+  - Journaled 文件系统：日志是用于恢复的辅助结构，文件数据和元数据仍然存储在传统的、原地更新的文件系统中
+  - Log structured 文件系统：日志是文件系统的主要结构，所有数据和元数据都存储在日志中。不原地更新，而是 Copy-on-Write 更新数据和元数据
+
+Journaling 文件系统：
+- 日志分为三部分：
+  - 已实际完成的事务
+  - pending 的事务（在日志中记录，尚未实际更新文件系统）
+    - tail 指针指向其末尾
+  - 正在写入日志的事务
+    - head 指针指向当前写入的位置
+- 先将更新写入日志，然后再实际更新文件系统中的数据结构（inode 指针、目录映射、...）
+- 垃圾回收：当实际的更新完成后，清除它在日志中的记录
+- Linux 采用了类 FFS 的 ext2 文件系统，并在其上添加了 journal，得到了 ext3 文件系统
+  - 选项：将所有数据写入 journal，还是只写元数据
+- 创建文件：
+  1. 根据 free space map 找到空闲数据块
+  2. 找到空闲 inode 表项
+  3. 找到对应的目录
+  4. 在日志中写事务开始
+  5. 在日志中写 free space map，将对应块标记为使用中
+  6. 在日志中写 inode，使其指向数据块
+  7. 在日志中写目录项，将文件名映射到 inode
+  8. 在日志中写事务提交，该事务成为 pending 事务
+- 所有对文件系统的访问都要先查看日志，因为文件系统中的数据结构可能是过时的
+- 最终，日志中的 pending 事务被实际应用到文件系统中，并通过垃圾回收机制从日志中被删除
+- Crash recovery
+  - 恢复时扫描日志，未提交的事务直接被丢弃
+    - 磁盘未被实际更新
+  - 已提交的事务被保留，应用到文件系统中（可以立即应用，也可让其稍后自然完成）
+- 整个 Journaling 机制的意义：原子化地更新文件系统，崩溃不会导致文件系统不一致
+- 代价较高：
+  - 所有数据必须被写入两次
+  - 现代文件系统只将元数据写入日志
+    - 文件内容数据直接裸着写入文件系统，不受日志保护
+
+### Distributed Systems
+
+中心化系统：主要功能由中心的一台物理计算机提供（Client-Server 模型）
+
+分布式系统：多个分布的物理计算机共同完成任务
+- 早期模型：集群
+- 后期模型：peer-to-peer/wide-spread collaboration
+
+分布式系统：
+- 愿景
+  - 获得很多小计算机廉价、简单
+  - 增量式地提高功耗
+  - 用户可以完全控制某些组件
+  - 用户间合作容易很多：有网络文件系统就不需要微信传来传去
+- 现实
+  - 差可用性：依赖所有电脑都在线
+    - Lamport: "A distributed system is one in which the failure of a computer you didn't even know existed can render your own computer unusable."
+  - 差可靠性：任一电脑崩溃都可能造成数据丢失
+  - 差安全性：所有人都能闯进系统
+  - 必须定位共享数据的多份拷贝
+  - Trust/Security/Privacy/Denial of Service
+    - Lamport: "A distributed system is one where you can't do work because some computer you didn't even know existed is successfully coordinating an attack on my system."
+- 透明性：将系统的复杂性隐藏在接口背后，从而使用户不必关心
+  - Location
+  - Migration：资源可以在不同机器间迁移
+  - Replication
+  - Concurrency
+  - Parallelism
+  - Fault Tolerance
+- 透明性和合作要求不同的处理器之间能够通信
+
+协议（protocol）：
+- 关于如何通信的协议
+  - 语法（Syntax）：指明信息的结构/格式
+  - 语义（Semantics）：指明信息的含义
+- 可以被状态机形式地描述
+
+分布式应用：
+- 多线程同步：没有共享内存，不能用 `test&set`
+- send/receive：原子操作
+- 接口：
+  - Mailbox（mbox）：保存消息的临时缓冲区
+  - `send(message, mbox)`：将消息发送到指定的 mailbox
+  - `receive(buffer, mbox)`：等待 mbox 的来信，将其拷贝到 buffer 中
+    - 如果有线程在此 mbox 上休眠，唤醒它
+
+分布式共识达成：
+- 共识问题
+  - 多个结点都提出值
+  - 有的结点正常，有的崩溃无响应
+  - 所有剩余结点需要根据被提出的值决定一个最终值
+  - 值可以是 true/false，也可以是 commit/abort
+- 共识决定需要是 durable 的
+
+Two General's Paradox：
+- 不可靠的网络下，两个实体无法达成共识
+  - Alice：早上 8 点？
+  - Bob：好！（这是 Bob 不知道 Alice 是否收到自己的回应，不敢发起行动）
+  - Alice：收到！（这是 Alice 也不知道 Bob 是否收到自己的收到，也不敢发起行动）
+  - Bob：收到收到！（同类）
+  - ...
+  - 两人永远无法确定对方是否收到自己的消息，导致都不敢发起行动
+- 无法保证双方**同时做**
+
+Two-Phase Commit
+- 不试图保证双方同时做，只保证双方最终会去做
+- 分布式事务：两台或多台机器可以原子性地同意或不同意做某件事
+
+Two-Phase Commit Algorithm：
+- 每台机器维护一个持久、稳定的日志，记录承诺是否发生
+  - 机器崩溃重启后，首先检查日志，恢复到崩溃前状态
+- 准备阶段（prepare phase）
+  - 全局协调者（global coordinator）向所有参与事务的结点（participants）发送请求，要求它们承诺（promise）是进行提交还是回滚操作
+  - 每个参与结点收到请求后，检查自己是否能够成功完成事务。将承诺写入自己的日志，并向协调者响应。两种承诺：
+    - Commit（同意提交）
+    - Abort（拒绝提交）
+  - 如果任一参与结点响应否决（abort），或响应超时，协调者将 "Abort" 写入自己的日志，并告知所有参与者。参与者们也将 "Abort" 写入自己的日志
+  - 如果所有参与者都响应同意，协调者将 "Commit" 写入自己的日志，进入提交阶段
+    - 一旦进行到此步，事务就必须被最终完成
+  - 因为机器不能撤回已发出的承诺，情况必居上述两种之一
+- 提交阶段（commit phase）
+  - 协调者向所有参与结点发送提交的指令
+  - 参与者执行实际的提交操作，在自己的日志中记录，并响应协调者
+  - 协调者收到所有参与结点的响应后，将 "Got Commit" 写入自己的日志
+- 日志用于保证所有机器要么全部提交，要么全部回滚
 
