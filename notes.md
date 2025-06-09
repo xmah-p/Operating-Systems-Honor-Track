@@ -59,6 +59,12 @@
     - [Durable File Systems](#durable-file-systems)
     - [Reliable File Systems](#reliable-file-systems)
     - [Distributed Systems](#distributed-systems)
+    - [Storage and File Systems in Modern Computer Systems](#storage-and-file-systems-in-modern-computer-systems)
+      - [Dedup](#dedup)
+      - [IOFlow](#ioflow)
+      - [The Google File System (GFS)](#the-google-file-system-gfs)
+      - [DC-Cache](#dc-cache)
+      - [Chord](#chord)
 
 
 # Operating Systems
@@ -3065,13 +3071,15 @@ Delayed Writes：Buffer cache 是一个写回（write-back）缓存，它会将�
 系统崩溃时，buffer cache 中的脏块会丢失。如果它恰好是目录的数据块，则会导致该目录下文件的 inode 指针丢失：文件系统状态错误，且内存泄漏！
 
 重要的 "ilities"：
-- Availability：系统可以接受并处理请求的概率，以 9 来衡量
+- **Availability**（可用性）：系统可以接受并处理请求的概率（系统有多少时间可用）
+  - 以 9 来衡量
   - 99.9% 概率是“3-nines of availability”
   - 独立于 failure
-- Durability：系统从 fault 中恢复数据的能力
+- **Durability**（持久性）：系统从 fault 中恢复数据的能力
   - fault tolerance
   - 先前存储的数据能够被重新取得，无论 failure 是否发生
-- Reliability：系统或组件能在给定条件下持续按要求工作指定时间的能力
+  - 磁盘挂了不可用，但数据没损坏：没有 availability，但有 durability
+- **Reliability**（可靠性）：系统或组件能在给定条件下持续按要求工作指定时间的能力
   - 一般比 availability 更强，也包括 security、fault tolerance/durability
 
 让文件系统 durable：
@@ -3306,18 +3314,274 @@ Two-Phase Commit
 Two-Phase Commit Algorithm：
 - 每台机器维护一个持久、稳定的日志，记录承诺是否发生
   - 机器崩溃重启后，首先检查日志，恢复到崩溃前状态
+- 理念：先确保所有人承诺将会提交，然后再要求所有人提交
 - 准备阶段（prepare phase）
-  - 全局协调者（global coordinator）向所有参与事务的结点（participants）发送请求，要求它们承诺（promise）是进行提交还是回滚操作
-  - 每个参与结点收到请求后，检查自己是否能够成功完成事务。将承诺写入自己的日志，并向协调者响应。两种承诺：
-    - Commit（同意提交）
-    - Abort（拒绝提交）
-  - 如果任一参与结点响应否决（abort），或响应超时，协调者将 "Abort" 写入自己的日志，并告知所有参与者。参与者们也将 "Abort" 写入自己的日志
+  - 全局协调者（global coordinator）向所有参与事务的结点（participants）发送 VOTE-REQ
+    - 参与结点在等待 VOTE-REQ 过程中可能超时而 abort（发送 VOTE-ABORT）
+  - 每个参与结点收到请求后，检查自己是否能够成功完成事务。将承诺写入自己的日志，并向协调者响应 VOTE-COMMIT（同意提交）或 VOTE-ABORT（拒绝提交）
+  - 如果任一参与结点否决（abort），或响应超时，协调者将 "Abort" 写入自己的日志，并向所有参与者发送 GLOBAL-ABORT。参与者们也将 "Abort" 写入自己的日志
   - 如果所有参与者都响应同意，协调者将 "Commit" 写入自己的日志，进入提交阶段
     - 一旦进行到此步，事务就必须被最终完成
-  - 因为机器不能撤回已发出的承诺，情况必居上述两种之一
+    - 也就是说 worker 的 failure 只在准备阶段有影响
 - 提交阶段（commit phase）
-  - 协调者向所有参与结点发送提交的指令
+  - 协调者向所有参与结点发送 GLOBAL-COMMIT
+    - 等待 GLOBAL-COMMIT 的参与结点不会因超时而中止，必须一直等
   - 参与者执行实际的提交操作，在自己的日志中记录，并响应协调者
   - 协调者收到所有参与结点的响应后，将 "Got Commit" 写入自己的日志
 - 日志用于保证所有机器要么全部提交，要么全部回滚
 
+分布式 decision making：
+- 为什么需要分布式决策？
+  - Fault tolerance：部分故障不影响系统运行
+  - 决策模式之后，结果多处存储
+- 为什么 2PC 不被 Two General's Paradox 影响
+  - 2PC 只需要保证所有结点**最终**达到同一决策，不要求**同时性**
+  - 允许重启和继续
+- 2PC 的问题：Blocking
+  - 站点 B 在日志中记录“准备好提交”，向协调者站点 A 发送 VOTE-COMMIT，然后崩溃
+  - 站点 A 也崩溃了
+  - 站点 B 重启后检查日志，发现日志中已经记录了“准备好提交”，向站点 A 发送信息询问当前状态
+    - 此时 B 不能决定中止，因为更新可能已经被提交
+  - B 被阻塞，直到 A 重启并响应
+
+### Storage and File Systems in Modern Computer Systems
+
+- I/O 设备：disk with dedup
+  - Dedup
+- I/O：端到端管理
+  - IOFlow
+- 现代文件系统
+  - GFS
+- RAID 和 erasure coding
+  - EC-Cache
+- 分布式应用文件系统
+  - Chord
+
+#### Dedup
+
+Deduplication：在全局文件系统中消除重复数据（全局压缩技术）
+- `lab3-designdoc-v1.md` 和 `lab3-designdoc-v2.md` 中的重复部分只存一份
+- 可以达到远超传统的小窗口压缩的压缩率
+- 例子：数据备份
+  - 备份的模式：全量备份、增量备份
+  - 很多冗余数据块：冗余数据块只存指针
+
+dedup 过程：
+- 数据流分割为数据块，每个数据块有一个唯一的指纹，作为索引
+- 每次存储时在文件系统中查找指纹是否存在，若存在，只存指纹，否则存储数据块
+
+高速、高压缩率、低硬件成本：
+- **Summary vector**
+  - 用 bloom filter（零一向量）总结什么数据块已经被存储
+  - 设数据块的指纹为 $x$
+  - 插入时计算 $h_1(x), h_2(x), h_3(x)$，将 bloom filter 中的 $h_1(x), h_2(x), h_3(x)$ 位置置为 1
+  - 查询时检查 bloom filter 中的 $h_1(x), h_2(x), h_3(x)$ 位置是否全为 1，
+    - 若全为 1，则数据块可能存在（false positive）
+    - 若有 0，则数据块一定不存在（不会有false negative）
+- Stream informed segmemnt layout
+  - 利用 duplicate locality，将来自同一个流的数据块以及元数据（索引数据）放在同一个 container 中
+- Locality preserved caching (LPC)
+  - 在缓存中维持 duplicate locality
+  - 磁盘索引保存 $\langle$指纹, container ID$\rangle$$ 对，它们被缓存在 index cache 中
+  - 缓存替换时，在 disk index 里找到对应的 container，将 container 的所有元数据加载进 index cache
+  - 也就是说，以 container 为单位进行缓存替换
+- 全过程
+  - 指纹先在 index cache 中查找。若找到，则说明已存在
+  - 若未找到，在 summary vector 中查找。若显示不存在，则说明未存储
+  - 若显示存在，则说明可能存在。继续在 disk index 中查找，并加载对应的 container metadata 到 index cache
+
+#### IOFlow
+
+企业数据中心：
+- 通用目的应用，运行在虚拟机上
+- VM-to-VM 通信网络和 VM-to-Storage 通信网络分离
+- 虚拟化的存储
+- 共享的资源
+
+动机：可预测的应用行为和性能
+- 端到端 SLA：
+  - 可保证存储带宽
+  - 可保证高 IOPS 和优先级
+  - 关于 I/O 路径的分应用决策控制
+- 当前系统 I/O 路径有太多层，难以配置
+  - 没有 storage control plane
+
+IOFlow：
+- 解耦数据平面（enforcement）和控制平面（policy logic）
+- 贡献
+  - 定义并构建了存储控制平面：中心化的控制器
+  - 控制平面和数据平面之间的 API（IOFlow API）
+  - 控制器通过 IOFlow API 控制数据平面中的可控制队列，从而满足性能 SLA 和非性能 SLA（如 bypassing malware scanner）
+- Storage traffic 中没有通用的 I/O 头：控制器 flow name resolution 
+- 拥塞控制中的 rate limiting：
+  - token bucket 不 work：读请求比写请求小很多，后者包含要写的数据。带宽都被读请求占了
+  - 按读写的实际大小，也不 work：写比读慢很多。带宽都被写请求占了
+  - 按 IOPS，还是不 work：读写的实际大小可能差别很大
+  - 建立一个 cost model，分配给每个队列
+- 数据平面中的可编程队列：
+  - 分类：I/O 头 -> 队列
+  - 队列服务
+  - 路由
+- 分布式、动态的 enforcement：
+  - SLA 需要 per-VM enforcement
+  - Max-min fair sharing：已有的是分布式的，本文提出基于中心化控制器的版本
+
+#### The Google File System (GFS)
+
+动机：
+- 结点 failure 频繁发生（服务器挂掉）
+- 文件数 GB
+- 多数文件修改以追加为主，随机写和覆写少
+- 高持续带宽比低延迟更重要
+
+典型负载：
+- 读
+  - 大的流式读，一般连续
+  - 小的随机读
+- 大的顺序追加写
+- 100 个左右客户同时追加同一个文件
+
+接口：
+- 非 POSIX，但支持 `create`、`delete`、`open`、`close`、`read`、`write`
+- `snapshot`：低成本创建文件或目录的拷贝
+- `record append`：并发的追加写，至少第一个写保证是原子的
+
+架构：
+- **数据流和控制流解耦**
+  - 客户与 master 交互，获取文件的元数据
+  - 客户的文件操作直接与 chunkservers 交互
+  - 根据网络拓扑调度昂贵数据流，以优化性能
+- Master node
+  - 负责系统级操作：管理 chunk leases、回收存储空间、负载均衡
+  - 维护文件系统元数据：全部在内存中，命名空间和 file-to-chunk mapping 持久地存储在 **operation log** 中
+    - 文件名到 chunk 的映射
+    - 每个 chunk 的位置
+    - 命名空间
+  - 通过 `HeartBeat` 信息周期性地与每个 chunkserver 通信，决定 chunk 位置，评估系统状态
+- Operation Log
+  - 元数据的唯一持久化记录
+  - 也作为并发操作的序列化的逻辑时间线
+  - Master 可以通过重放 operation log 恢复状态
+  - Master 周期性 checkpoint
+
+为什么 single master？
+- Master 拥有全局信息，简化设计
+- Master 一般不是性能瓶颈
+  - Master 只处理元数据请求，客户端文件操作直接与 chunkserver 通信
+- Master 通过 operation log 和 checkpoint 备份在多台机器
+  - Shadow masters 可以提供文件系统的只读访问，这样在主 master 挂掉时，仍然可以访问文件系统
+
+Chunks 和 Chunkservers：
+- 文件被分割为固定大小 chunk，每个 chunk 有一个不可变、全局唯一的 64 位 chunk handle
+- Chunkservers 将 chunk 以 Linux 文件形式存储在本地磁盘
+  - 元数据存储在 master 中，包括当前备份位置、引用计数（copy-on-write）、版本号
+- Chunk size：64 MB（比大多数文件系统大很多）
+  - 缺点：内部碎片化严重、并发的小文件操作占用较多流量
+  - 优点：
+    - 减少与 master 的交互开销
+    - 维持一个持久的 TCP 连接，减少网络开销
+    - 减少元数据大小，可以完全存储在内存中
+
+当 master 节点收到对某个 chunk 的修改操作时：
+- Master 寻找持有该 chunk 的所有 chunkserver，并授权其中一个“租约”(lease)
+  - 被授权的服务器称为 primary (主副本)，其他持有相同 chunk 的服务器则被称为 secondary (次副本)
+  - Primary 负责确定该 chunk 所有修改操作的序列化顺序，所有 secondary 都必须遵循此顺序
+  - 租约到期后 (约60秒)，master 可以将该 chunk 的 primary 身份授予另一个 chunkserver
+- Master 有时也可以撤销租约 (例如，当文件正在重命名时，为了禁止修改操作)
+- 只要该 chunk 持续被修改，primary 就可以无限期地请求延长租约
+- 如果 master 与 primary 失去联系，也没关系：只需在旧租约到期后，授予一个新的租约即可
+
+客户端写入流程
+1. 客户端向 master 请求持有该 chunk 的所有 chunkserver (包括所有的 secondary)。
+2. Master 授予一个新的租约，增加 chunk 的版本号，并通知所有副本 (replica) 也同样增加版本号。然后 master 将这些信息回复给客户端。此后，客户端在本次写入中不再需要与 master 通信。
+3. 客户端将要写入的数据推送给所有的副本服务器 (不一定先推给 primary)。
+4. 一旦所有副本都确认收到了数据，客户端就向 primary 发送写入请求。Primary 负责决定所有并发修改的序列化顺序，并将这些修改应用到其本地的 chunk 上。
+5. Primary 完成修改后，将写入请求和序列化顺序转发给所有的 secondary，这样它们就可以按照完全相同的顺序应用这些修改。（如果 primary 在此过程中失败，这一步将不会发生。）
+6. 所有的 secondary 在完成修改后，会向 primary 回复确认消息。
+7. Primary 最终向客户端回复成功或错误信息。
+  - 如果写入在 primary 上成功，但在任何一个 secondary 上失败，此时副本间就出现了不一致的状态 -> 错误会被返回给客户端。
+  - 客户端可以重试第 (3) 步到第 (7) 步。
+- 注意：如果一次写入操作跨越了 chunk 的边界，GFS 会将其拆分成多个独立的写入操作。
+
+#### DC-Cache
+
+数据密集型集群依靠分布式、in-memory 缓存来提高性能
+
+集群中的不平衡导致**负载不均衡和高的读延迟**：**内存中数据单份存储不足以满足高性能要求**
+- 数据流行度不均（热数据和冷数据）
+- 后台网络不均衡
+- 失败/不可用
+
+流行方法：selective replication
+- 将热数据备份到更多的节点上
+- Erasure coding 可以在不增加内存开销的前提下，提到读的性能，使负载更均衡
+
+回顾：erasure coding
+- 将数据分为 $k$ 个数据块，生成 $r$ 个校验块
+- 任意 $k$ 个块都可以恢复整份数据
+
+EC-Cache 鸟瞰：
+- 写
+  - 数据分为 $k$ 个数据单元，encode 生成 $r$ 个校验单元
+  - 将 $k + r$ 个单元缓存到不同服务器上（均匀随机分布）
+- 读
+  - 均匀随机地读 $k+\delta$ 个单元（additional reads）
+  - 使用前 $k$ 个到达的单元 decode 并合并出数据
+- 优点：
+  - 对内存的细粒度控制：Selective replication 以整份数据为单位，EC-Cache 允许更细粒度
+  - 数据被分割，优化负载均衡
+    - Selective replication 的负载方差是 EC-Cache 的 $k$ 倍
+  - 数据被分割，中位延迟降低，但尾延迟提高。Additional reads 可以降低尾延迟
+
+和存储系统中的 erasure coding 在设计考量上的区别：
+- 目的：
+  - 存储系统：空间高效的 fault tolerance
+  - EC-Cache：降低读延迟、负载均衡
+- Erasure code 选择：
+  - 存储系统：高效的存储和重建，不一定满足“any $k$ out of $k+r$”性质
+  - EC-Cache：内存 cache 中不需要重建，要求“any $k$ out of $k+r$”性质
+- 数据分割方法：
+  - 存储系统：可以在对象之间，也可以在对象内部
+  - EC-Cache：数据分割在对象内部
+
+#### Chord
+
+问题：在分布式文件共享系统中，如何定位数据
+- 中心化：单点故障、需要存大量索引信息
+- Naive 分布式：Flooding（我问你，你问他），开销大、延迟高
+- Chord：routed messages
+
+路由的挑战：
+- 定义 key nearness metric
+- 保持跳数较少
+- 保持路由表大小合适
+- 面对剧烈变化健壮
+
+Chord：
+- P2P 哈希表查找服务：键为 IP 地址
+  - Chord 不存储数据
+- 性质：
+  - 查找发送 $O(\log N)$ 条消息
+    - $N$ 为服务器数量
+  - Scalable：每个结点保存 $O(\log N)$ 个路由表项
+  - 健壮（假设没有恶意结点）
+- Chord ID
+  - SHA-1 哈希函数
+  - 键 ID：键
+  - 结点 ID：IP 地址
+  - 均匀分布
+- Consistent Hashing：键被存储在其 ID 大于等于该键的第一个结点上
+  - 例如，键 ID 为 $k$，结点 ID 为 $n$，则存储在第一个满足 $n \geq k$ 的结点上
+  - 所有结点被组织为环，最大结点 ID 的下一个结点是最小结点 ID 的结点
+- 查找：
+  - 如果所有结点都保存全局信息，则查找只需 $O(1)$ 时间，但路由表空间开销为 $O(N)$
+  - 如果所有结点只保存下一个结点信息，则查找需要 $O(N)$ 时间，但路由表空间开销为 $O(1)$
+  - Finger tables：
+    - 结点 $n$ 保存结点 $n + 2^i$ 的信息，其中 $i = 0, 1, ..., m-1$，$m$ 是 ID 的位数
+      - 它们称为结点的 fingers
+    - 时间开销和空间开销均为 $O(\log N)$
+- Joining the Ring
+  - 初始化新结点的 finger table
+    - 若新结点 ID 为 $36$，则它的 finger table 包含结点 $37, 38, 40, ...$
+    - 更新新结点的 finger table 表项
+    - 将下一个结点中 ID 小于新结点 ID 的键传送到新结点
