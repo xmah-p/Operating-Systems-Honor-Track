@@ -63,7 +63,7 @@
       - [Dedup](#dedup)
       - [IOFlow](#ioflow)
       - [The Google File System (GFS)](#the-google-file-system-gfs)
-      - [DC-Cache](#dc-cache)
+      - [EC-Cache](#ec-cache)
       - [Chord](#chord)
 
 
@@ -85,44 +85,10 @@ Four Fundamental OS Concepts:
 - Process
 - Dual mode operation / Protection
 
-简单的保护机制：Base and Bound  
-- Base：进程在物理内存中的起始地址
-- Bound：进程虚拟地址的最大范围
-
-Load-time relocation：  
-- 加载时由加载器直接将程序中的虚拟地址修改为物理地址
-  - 若基址为 `0x1000`，则程序中的虚拟地址 `0x100` 被改写为 `0x1100`
-- 特点：
-  - 静态绑定：加载时完成地址转换，运行时基址不变
-  - 灵活性差：一旦加载无法移动
-  - 无需硬件支持
-
-Run-time relocation：  
-- 加载时保留虚拟地址，运行时通过基址寄存器动态转换
-- 特点
-  - 动态绑定：运行时完成地址转换，基址可在进程切换时动态调整
-  - 灵活性高：进程可加载到任意空闲内存区域，减少碎片
-  - 需要硬件支持：基址寄存器和地址转换电路
-
-B&B 的优点：  
-- 简单
-- 进程间隔离、进程和 OS 隔离
-
-B&B 的缺点：  
-- 碎片化
-  - 内部碎片化：每个进程堆和栈之间的内存浪费
-  - 外部碎片化：进程之间的内存浪费
-- 不支持分段（稀疏的地址空间）
-  - 地址空间是单一的连续块，不支持代码、数据、堆、栈分段
-- 难以共享内存
-- 进程地址空间大小受限，无法扩展
-
 从用户态切换到内核态：  
 - 系统调用
 - 外部中断
 - 内部中断
-
-
 
 ## Abstraction 
 
@@ -915,6 +881,8 @@ swap(&addr, reg) {
 }
 
 // 68000
+// 如果 *addr 的值和期望的旧值相等，就将其更改为新值并返回 success
+// 否则返回 failure
 compare&swap(&addr, reg1, reg2) {
     if (reg1 == *addr) {
         *addr = reg2;
@@ -1832,63 +1800,96 @@ Memory multiplexing：
 
 #### Segmentation
 
-Uniprogramming：  
+**Uniprogramming**：  
 - 无翻译
 - 无保护
 - 同一时刻仅有一个应用程序运行，独占 CPU 和所有内存
 
-Primitive multiprogramming：  
+**Primitive multiprogramming**：  
 - 无翻译
 - 无保护
 - Loader/Linker 调整程序内各指令包含的地址（load、store、jump）
 - 一个程序的 bug 可能影响其他程序，甚至 OS
 
-Multiprogramming with protection: Base and Bound
+Multiprogramming with protection: **Base and Bound**
+- Base：进程在物理内存中的起始地址
+- Bound：进程虚拟地址的最大范围
+- **加载时重定位**：  
+  - 加载时由**加载器**直接将程序中的虚拟地址修改为物理地址
+    - 若基址为 `0x1000`，则程序中的虚拟地址 `0x100` 被改写为 `0x1100`
+  - 特点：
+    - **静态绑定**：加载时完成地址转换，运行时基址不变
+    - **灵活性差**：一旦加载无法移动
+    - **无需硬件支持**
+- **运行时重定位**：  
+  - 加载时保留虚拟地址，**运行时通过基址寄存器动态转换**
+  - 特点
+    - **动态绑定**：运行时完成地址转换，基址可在进程切换时动态调整
+    - **灵活性高**：进程可加载到任意空闲内存区域，减少碎片
+    - **需要硬件支持**：基址寄存器和地址转换电路
+- 优点：  
+  - **简单**
+  - **保护**：**进程间隔离、进程和 OS 隔离**
+-缺点：  
+  - **碎片化**
+    - 内部碎片化：每个进程堆和栈之间的内存浪费
+    - 外部碎片化：进程之间的内存浪费
+  - **不支持分段（稀疏的地址空间）**
+    - 地址空间是单一的连续块，不支持代码、数据、堆、栈分段
+  - **进程间难以共享内存**
+  - **进程地址空间大小受限，无法扩展**
 
-带 segmentation 的 base and bound：  
-- 虚拟地址划分为两部分：segment 号和 offset
-- 处理器内部存一个 segment map
-  - 将 segment 号映射到一个 (base, limit, valid) 三元组
-- 访问虚拟地址时，处理器在 segment map 中查找虚拟地址对应的 segment 号
-  - 检查是否有效（valid）、是否越界（limit）
-  - 如果有效且没有越界，则将 base 加上 offset，得到物理地址
+带 **segmentation** 的 base and bound：  
+- 虚拟地址划分为两部分：**段号**（segment number）和**段偏移**（offset）
+- 处理器内部存一个**段表**（segment map）
+  - 段号为索引
+  - 段表项为 **(base, limit, valid) 三元组**
+- 内存访问时，根据虚拟地址的段号字段，在段表中索引对应的段表项
+  - 如果**有效且没有越界**，则计算物理地址
+  - **物理地址 = 段表项中的基址 + 虚拟地址的段偏移**
 
-Segmentation 的若干观察：  
-- 每条内存访问指令都触发地址翻译
-- Segmentation 高效地支持了稀疏的虚拟地址空间
+分段的若干观察：  
+- **每条内存访问指令都触发地址翻译**
+- 高效地支持了**稀疏的虚拟地址空间**
 - 栈触发 fault 时，系统会自动扩展栈空间
-- Segment map 需要保护模式
+- 段表需要**保护模式**
   - 代码段应只读
-- segment map 存放在 CPU，上下文切换时无需保存和恢复
-- 当 segment 无法装进内存时，会换出到硬盘
+- 段表存放在 CPU 中，是**全局**的，**上下文切换时无需保存和恢复**
+- 当段无法装进内存时，会换出到硬盘
 - 问题
-  - 物理内存需要容纳变长的块
-  - 为了装得下所有段，可能需要多次移动进程的地址空间
-  - Swapping to disk 的粒度太大
+  - 物理内存需要容纳**变长的块**（段），导致外部碎片化
+    - **如果段定长（页），则可消灭外部碎片化**
+  - 为了装得下所有段，可能需要多次移动整个进程的地址空间
+  - 换出到磁盘的粒度太大：**整个进程**！
   - 碎片化：
-    - 外部碎片化：已分配的块之间的空隙
-    - 内部碎片化：已分配的块中未使用的空间
+    - 外部碎片化：已分配的段之间的空隙
+    - 内部碎片化：已分配的段中未使用的空间
 
 #### Paging
 
 Paging：  
-- 每个进程拥有一个页表，存放在物理内存中
-- 页表项：(Physical Page Number, permission flags)
-- 虚拟地址映射：
-  - 虚拟地址 = (Virtual Page Number, Virtual Page Offset)
-  - 物理地址 = (Physical Page Number, Physical Page Offset)
-  - VPO = PPO
-  - 页表中 VPN 索引的页表项存放对应的 PPN 及权限位
-- 进程之间的共享页
-  - 共享页的 PPN 出现在所有共享该页的进程的页表中
-  - 每个进程地址空间的内核区域是共享的
-    - 进程在用户模式无法访问内核区域，但在用户 -> 内核切换时，内核既可以访问内核区域，也可以访问用户区域
-  - 不同进程运行同一份代码时，代码段是共享的（只执行）
-  - 用户级别的系统库（只执行）
-  - 共享内存段（shared memory segment）
+- 虚拟地址空间被划分为**固定大小的页**（page）
+  - **不存在外部碎片化！**
+  - 页大小应小于段大小，以减轻内部碎片化
+  - 虚拟地址被分割为**虚拟页号**（Virtual Page Number, VPN）和**虚拟页偏移**（Virtual Page Offset, VPO）
+  - 物理地址被分割为**物理页号**（Physical Page Number, PPN）和**物理页偏移**（Physical Page Offset, PPO）
+  - 其中 VPO 和 PPO 相同
+- **页表**（Page Table）
+  - **每个进程都拥有一个页表，存放在物理内存中**
+  - 索引：VPN
+  - 页表项（Page Table Entry, PTE）：(PPN, 权限位)
+
+进程之间的共享页
+- 共享页的 PPN 出现在**所有共享该页的进程的页表**中
+- 也就是说，**不同的进程用不同的虚拟地址访问同一个物理地址**
+- **每个进程地址空间的内核区域是共享的**
+  - 进程在用户模式无法访问内核区域，但在用户 -> 内核切换时，内核既可以访问内核区域，也可以访问用户区域
+- 不同进程运行同一份代码时，代码段是共享的（只执行）
+- 用户级别的系统库（只执行）
+- 共享内存段（shared memory segment）
 
 页表讨论：  
-- 上下文切换时，页表指针和页表界限需要保存和恢复
+- 因为页表是 per-process 的，**上下文切换时，页表指针和页表界限需要保存和恢复**
 - 保护是如何实现的？
   - Per process 的地址翻译
   - 双模式
@@ -1897,60 +1898,62 @@ Paging：
   - 简单的内存分配
   - 容易实现共享
 - 缺点：
-  - 单级页表，页表项太多了（且大部分是空的），存不下
+  - 单级页表，**页表项太多了**（且**大部分是空的**），存不下
 
 两级页表：  
 - 单级页表中 20 位的 VPN 进一步划分为 10 位的 VPN1 和 VPN2
 - 二级页表基址存放在 PageTablePtr 寄存器（CR3）
-- Page Table Entry（PTE）存放下一级页表的基址或 PPN，以及标志位（valid, read-only, read-write, write-only, ...）
+- **第一级页表的 PTE 存放第二级页表基址**
+- **第二级页表的 PTE 存放 PPN**
 - 有效位为零：
-  - Segfault
-  - 缺页（未缓存到内存）
+  - **Segfault（权限错误）**
+  - **缺页（页未缓存到内存）**
 
-Demand paging：  
-- 内存中只存放活跃的页，其他页放在硬盘上（PTE 有效位置零）
-
-Copy-on-write：  
-- Unix fork 复制父进程的页表，并将两份页表的所有 PTE 都标记为只读
-- 写操作触发缺页异常，OS 复制对应的页
-
-Zero-fill-on-demand：  
-- 新的数据页应当被清零（be zeroed），防止敏感信息泄露
-- 将 PTE 标记为无效，使用时触发缺页异常，OS 清零对应的页
-
-内存共享：  
-- 两个进程的二级页表的 PTE 指向同一个物理页（共享一页物理内存）
-- 两个进程的一级页表的 PTE 指向同一个二级页表（共享一大块物理内存）
+基于页表的虚拟内存系统的功能：
+- **Demand paging**：**内存中只存放活跃的页。不活跃的页放在硬盘上**（PTE 有效位置零），访问时触发缺页异常，由 OS 将其换入到内存中。
+- **Copy-on-write**：  
+  - Unix `fork` 系统调用**复制父进程的页表**，并**将两份页表的所有 PTE 都标记为只读**
+  - 写操作触发缺页异常，OS 实际复制对应的页
+- **Zero-fill-on-demand**：  
+  - 新的数据页应当被清零（be zeroed），防止敏感信息泄露
+  - 将 PTE 标记为无效，使用时触发缺页异常，OS 清零对应的页
+- **内存共享**：  
+  - 两个进程的二级页表的 PTE 指向同一个物理页（共享一页物理内存）
+  - 两个进程的一级页表的 PTE 指向同一个二级页表（共享一大块物理内存）
 
 多级翻译：段 + 页  
-- 低级：页表
-- 高级：段表
-- VPN1 是段号，指向一个 (base, limit, valid) 三元组，这个三元组指向一个二级页表
-- VPN2 指向二级页表中的 PTE
-- 上下文切换时，最高级段寄存器、最高级页表基址需要保存和恢复
+- 虚拟地址分为 (VSN, VPN, VPO)
+- 段表
+  - 索引：VSN
+  - 段表项：(base, limit, valid) 三元组，其中 base 为页表基址
+- 页表
+  - 索引：VPN
+  - 页表项：(PPN, 权限位)
+- **上下文切换时，最高级段寄存器、最高级页表基址需要保存和恢复**
 
 x86-64：四级页表  
 - 48 位虚拟地址：(9, 9, 9, 9, 12)
-- 一页 4 KB
-- 每个 PTE 占 8 字节，每个页表有 512 个 PTE => 每个页表占 4 KB，刚好 fit 一个页
+- **一页 4 KB，因此 VPO 占 12 位**
+- **PTE 大小为 8 字节，一页可以存放 512 个 PTE，因此每级 VPN 占 9 位**
 
 IA64：六级页表  
 - 64 位虚拟地址：(7, 9, 9, 9, 9, 9, 12)
 - 很慢
-- 太多 almost-empty 页表
+- 太多 almost-empty 页表（高级页表管很大一块物理内存，大部分都用不到）
 
 多级页表分析：  
 - 优点：
-  - 按需创建 PTE（单级页表必须创建所有 PTE），节约内存，对稀疏地址空间友好
+  - **按需创建 PTE**（单级页表必须创建所有 PTE），**节约内存**，**对稀疏地址空间友好**
   - 容易的内存分配
   - 容易的共享（段级别和页级别）
 - 缺点
   - 每页都需要一个指针
   - 页表需要是连续的（10b-10b-12b 地址组织使得每个页表都在同一页，解决了此问题）
-  - 查表的时间开销（$k$ 级查表需要 $k$ 次内存访问）
+  - 查表的时间开销（$k$ 级查表需要 $k$ 次内存访问以获得 PPN）
+    - 加上实际的内存访问，总共需要访问 $k+1$ 次
 
 Dual-Mode 操作：  
-- 进程不能修改自己的页表
+- **进程不能修改自己的页表**
   - 否则它就能访问整个物理内存了
 - 硬件提供至少两个模式
   - 用户模式：进程只能访问自己的页表
@@ -1959,25 +1962,27 @@ Dual-Mode 操作：
   - 内核可以切换到用户模式，用户程序必须调用特殊异常来切换到内核模式
 
 Inverted Page Table:  
-- 传统多级页表，每个页表必须存放所有的 PTE，浪费内存空间
-- 倒置页表通过一个全局的 hash 表，将 (PID, VPN) 映射到 PPN
+- **传统多级页表，每个页表必须存放所有的 PTE，浪费内存空间**
+- 倒置页表通过一个**全局的 hash 表**，将 (PID, VPN) 映射到 PPN
 - 倒置页表的大小和虚拟地址空间无关，只和物理内存大小有关（对于 64 位机器很有吸引力，因为 64 位机器前者远大于后者）
 - 用硬件实现 hash chain，比较复杂
-- 缓存局部性不好
+- **页表缓存局部性不好**：相邻的虚拟页不一定在一起
 
 地址翻译比较
 
 |                       |                        优势                        |                           劣势                           |
 | :-------------------: | :------------------------------------------------: | :------------------------------------------------------: |
-|  Simple Segmentation  |          快速的上下文切换（CPU 存储段表）          |                     内部/外部碎片化                      |
-| Paging (Single-Level) |          无外部碎片化、快速简单的内存分配          | 过大的页表（接近虚拟内存大小，大部分是空的）、内部碎片化 |
-|  Paged Segmentation   | 页表大小接近虚拟内存中页的数量，快速简单的内存分配 |                  页访问需要多次内存访问                  |
+|  Simple Segmentation  |          **快速的上下文切换**（CPU 存储全局段表）          |                     **内部/外部碎片化**                      |
+| Paging (Single-Level) |          **无外部碎片化**、快速简单的内存分配          | **过大的页表**（接近虚拟内存大小，大部分是空的）、内部碎片化 |
+|  Paged Segmentation   | **页表大小接近虚拟内存中页的数量**，快速简单的内存分配 |                  页访问需要多次内存访问                  |
 |  Multi-Level Paging   | 页表大小接近虚拟内存中页的数量，快速简单的内存分配 |                  页访问需要多次内存访问                  |
-|  Inverted Page Table  |           页表大小接近物理内存中页的数量           |             复杂的哈希实现，页表缓存局部性差             |
+|  Inverted Page Table  |           页表大小接近物理内存中页的数量           |             复杂的哈希实现，**页表缓存局部性差**             |
 
 ### Caching
 
-处理器用虚拟地址向 MMU 发出请求，MMU 在 TLB 中找到对应物理地址回应给 CPU（或触发异常）。 
+
+
+TLB（Translation Look-aside Buffer）：处理器用虚拟地址向 MMU（Memory Management Unit）发出请求，MMU 在 TLB 中找到对应物理地址回应给 CPU（或触发异常）。 
 
 衡量缓存性能的指标：平均访问时间
 
@@ -1987,14 +1992,14 @@ $$\begin{align*}
 \end{align*}$$
 
 
-如果没有 cache，每次实际 DRAM 访问需要 页表级数 + 1 次 DRAM 访问，开销极大，且如果页表在硬盘中，还需要 I/O。
+如果没有缓存，每次实际 DRAM 访问需要 页表级数 + 1 次 DRAM 访问，开销极大，且如果页表在硬盘中，还需要磁盘 I/O。
 
 缓存不命中的原因  
-- Compulsory：冷启动
-- Capacity：缓存不够大
-- Conflict：多个内存位置被映射到同一个缓存位置
+- **Compulsory**：冷启动
+- **Capacity**：缓存不够大
+- **Conflict**：多个内存位置被映射到同一个缓存位置
   - 解决方法：增大缓存、提高 associativity
-- Coherence：其他进程（I/O）更新了内存
+- **Coherence**：其他进程（I/O）更新了内存
 
 Cache 回顾：  
 - 地址分为 (Cache Tag, Cache Index, Byte Offset)
@@ -2003,6 +2008,7 @@ Cache 回顾：
 - N-way set associative：
   - 每组有 N 行
   - Cache Index 决定组号，比较每行的 Cache Tag 确定对应行（或确定 Cache Miss） 
+    - 用 Cache Index 而不是 Cache Tag 作为组索引，目的在于**避免相邻地址被分配到同一组，造成冲突性不命中**
 - Fully associative：
   - Cache Index 不存在，所有行都可以存放任何数据
   - 需要比较所有行的 Cache Tag 确定对应行（或确定 Cache Miss）
@@ -2012,28 +2018,28 @@ Cache 回顾：
   - 直接映射不存在非平凡替换策略，因为每个组只有一行
 - 写入策略：
   - Write-through：每次写入都更新下层存储器（DRAM）和 cache
-    - 读不命中不会触发写回
     - 写延迟高
     - 总线带宽压力大
   - Write-back：只更新 cache，直到 cache 被替换时才更新 DRAM
     - 频繁的写场景下性能更好
     - 复杂
 
-物理索引 Cache vs 虚拟索引 Cache：  
-- 物理索引 Cache：
-  - CPU 通过虚拟地址访问 TLB，TLB 翻译得到物理地址访问 Cache
+**物理索引高速缓存 vs 虚拟索引高速缓存**：  
+- 物理索引高速缓存：
+  - **CPU 通过虚拟地址访问 TLB，TLB 翻译得到物理地址访问高速缓存**
   - 页表中存放物理地址
   - 更常见
   - 好处：
-    - 每个数据块在 cache 中只存一份
-    - 上下文切换无需 flush cache
+    - **同一个数据块在高速缓存中只存一份**
+    - **上下文切换无需 flush 高速缓存**
   - 坏处：
-    - TLB 处于内存访问的关键路径‘
-- 虚拟索引 Cache：
-  - CPU 通过虚拟地址访问 Cache 和 TLB（Cache 访问和内存访问并行）
+    - **TLB 处于内存访问的关键路径**
+- 虚拟索引高速缓存：
+  - CPU 通过虚拟地址访问高速缓存和 TLB（**高速缓存访问和内存访问可并行**）
   - 页表中存放虚拟地址
   - 坏处：
-    - 每个数据块在 cache 中存多份
+    - **同义词问题**：**同一个数据块在高速缓存中可能存多份**（因为不同进程的不同虚拟地址可能对应同一个物理地址）
+    - **异义词问题**：**上下文切换需要 flush 高速缓存**（因为不同进程的相同虚拟地址可能对应不同的物理地址）
 
 TLB 组织：  
 - Miss time 极高（多级页表遍历）
@@ -2044,57 +2050,61 @@ TLB 组织：
 - 小 TLB 一般全相联
 - 更大的则在全相联 TLB 之前放一个直接映射 TLB（4-16 个条目），称为 TLB slice
 
-虚拟地址：(VPN, VPO) => (VPN, cache index, byte offset)  
-- VPO 恰好又被划分为 cache index 和 byte offset，且 VPO = PPO
-- 从而 TLB 查找（使用 VPN）和 cache 查找的组索引过程（使用 PPO）可以**并行**进行：
-  - TLB 使用 VPN 查找对应的 PPN，同时 cache 使用 PPO 查找对应的 cache set
-  - TLB 取出 PPN，cache 根据 PPN 比对找到对应的 cache line
-- VPO 为 12 位，这限制了 cache 的大小，更大的 cache 难以完全并行化，需要其他设计
-- 虚拟地址索引的 cache 能更完全地并行
+**TLB 查找和高速缓存查找并行**：
+- (VPN, VPO) => (VPN, cache index, byte offset)  
+- **VPO 恰好又被划分为 cache index 和 byte offset，且 VPO = PPO**
+- 从而 TLB 查找（使用 VPN）和高速缓存查找的**组索引过程**（使用 PPO）可以**并行**进行：
+  - TLB 使用 VPN 查找对应的 PPN，同时高速缓存使用 PPO 查找对应的 cache set
+  - TLB 取出 PPN，高速缓存根据 PPN 比对找到对应的 cache line
+- VPO 为 12 位，这限制了高速缓存的大小，更大的高速缓存难以完全并行化，需要其他设计
+- 虚拟地址索引的高速缓存能更完全地并行
 
 上下文切换时  
 - 因为虚拟地址空间也被切换了，TLB 条目都无效了
 - 选项：
-  - 无效化 TLB 条目：简单但开销大（两个进程来回切换）
-  - 在 TLB 中包含 PID：需要硬件支持
+  - **无效化 TLB 条目**：**简单但开销大**（两个进程来回切换）
+  - **在 TLB 中包含 PID**：需要硬件支持
 - 如果页表改变了，也需要无效化 TLB 条目
-  - 比如页被换出
+  - 比如**页被换出**
   - TLB Consistency
-- 虚拟索引的 cache，还需要 flush
+- 虚拟索引的高速缓存，还需要 flush
 
 ### Demand Paging
 
 缺页:  
-- 地址翻译失败时
-  - PTE 无效、特权级违规（Privilege level violation，用户执行内核指令/访问内核空间地址）、访问违规（Access violation，写只读页、用户访问内核页等）
+- 发生在地址翻译失败时
+  - 原因：
+    - **PTE 无效**：页不在物理内存中，需要换入
+    - **特权级违规**（Privilege level violation，用户执行内核指令/访问内核空间地址）
+    - **访问违规**（Access violation，写只读页、用户访问内核页等）
   - 这会导致 fault/trap
     - interrupt 指外部中断
   - 可能在指令取指或数据访问时发生
 - Protection violation 通常终止指令执行
 - 其他缺页会使 OS 处理并重试该指令，有可能是以下几种情况：
-  - 分配新的栈页
-  - 使得页可访问（Copy-on-write）
-  - 从下级存储器中读取页（demand paging）
+  - **分配新的栈页**
+  - 使得页可访问（**Copy-on-write**）
+  - 从下级存储器中读取页（**demand paging**）
 
 Demand Paging：  
 - 现代程序用许多物理内存，但它们将 90% 的时间花在执行 10% 的代码上
-- 将主存作为硬盘的 cache
+- 将主存作为硬盘的缓存
 - 工作过程：
   - 进程访问一个页，但页表中该页的 PTE 无效
   - MMU traps 到 OS（触发缺页）
-  - OS 中的 page fault handler 
+  - OS 中的缺页处理程序
     - 选择一个空闲的物理页
       - OS 维护一个空闲物理页列表
       - 当物理内存占用过高时，OS 会运行 reaper：写回脏页、清零冷页
       - 如果没有空闲物理页：根据替换算法选择要替换的页。如果该页被修改过，将其写回到硬盘，并在 TLB 中无效化该页的 PTE
-    - OS 定位新页在 swap file 的位置，将其加载到内存
+    - OS 定位新页在交换空间的位置，将其加载到内存
     - 更新页表 PTE
     - 将用户进程标记为 ready
   - 调度器未来会调度该进程，重试该指令
   - 在等待页读写的过程中，OS 可以调度其他进程
 - Demand paging 作为 caching：
   - 块大小：4 KB
-  - 全相联（任意映射）
+  - 全相联（交换空间中的任何页都可以映射到物理内存中的任何位置）
   - 替换策略
   - 未命中：从低级存储器中填充
   - 写：写回（需要 dirty bit）
@@ -2110,14 +2120,15 @@ Demand Paging 应用：
   - 将所有 PTE 标记为非写的
   - 共享的只读页仍然是共享且只读的
   - 写时复制（Copy-on-write）
-- Exec
-  - 只在真正使用时将二进制文件加载到内存中
-- mmap
-  - 显式共享内存区域或将文件映射到内存
+- `exec`
+  - 懒加载：只在实际访问时将二进制文件加载到内存中
+- `mmap`
+  - 显式共享内存区域
+  - 将文件映射到内存
 
 将可执行文件加载到内存：  
 - OS 初始化寄存器，设置堆栈
-- OS 为进程创建一个完整的 VAS 映射：
+- OS 为进程创建一个完整的虚拟地址空间（VAS）映射：
   - 通过页表记录所有虚拟页的状态：
     - 驻留页：已加载到物理内存
     - 非驻留页：仍存储在磁盘的交换文件（Swap File）中
@@ -2131,7 +2142,7 @@ Demand Paging 应用：
 
 工作集（working set）模型：  
 - 每个进程的工作集是它在过去一段时间内访问的页的集合
-- 随着时间推移，cache 被越来越多进程的工作集填满
+- 随着时间推移，高速缓存被越来越多进程的工作集填满
 
 Demand paging cost:
 
@@ -2140,39 +2151,39 @@ $$\begin{align*}
 &= \text{Hit Time} + \text{Miss Rate} \cdot \text{Miss Penalty} \\
 \end{align*}$$
 
-Demand Paging misses：  
+Demand Paging 不命中分析：  
 - Compulsory：冷启动，页尚未加载到物理内存
-  - 预取（prefetch），提前加载页到内存。需要预测未来的访问模式！
+  - 预取（prefetch），提前加载页到内存。**需要预测未来的访问模式**！
 - Capacity：物理内存不够大
   - 加物理内存
   - 调整每个进程分配的内存比例
-- Conflict：虚拟内存是“全相联”的，原理上不存在 conflict miss
+- Conflict：虚拟内存是“全相联”的，**原理上不存在 conflict miss**
   - 任意虚拟页可以映射到任意物理页，不存在固定位置的竞争
-- Policy：页本来在物理内存中，然而被替换政策过早地踢出了
+- **Policy**：**页本来在物理内存中，然而被替换政策过早地踢出了**
 
-Replacement Policy:  
-- Demand paging 的 miss penalty 极高：硬盘 I/O！
+**替换策略**:  
+- Demand paging 的 **miss penalty 极高：硬盘 I/O！**
 - First In, First Out (FIFO)：
   - 最老的页被替换
-  - 不好——考虑的是资历，而非使用频率
+  - 不好——**FIFO 考虑的是资历，而非使用频率**
 - RANDOM
   - 硬件上简单，TLB 的典型做法
-  - 不可预测
-- MIN（Minimum）
-  - 替换未来最长时间不使用的页
-  - 理论最优，但我们无法预测未来
+  - **不可预测**
+- **MIN（Minimum）**
+  - **替换未来最长时间不使用的页**
+  - **理论最优**，但我们**无法预测未来**
   - 过去是未来的良好指示
-- Least Recently Used (LRU)：
-  - 替换最近最少使用的页
-  - 局部性：最近用得少，未来可能也用得少
-  - 似乎是 MIN 的优秀近似
+- **Least Recently Used (LRU)**：
+  - **替换最近最少使用的页**
+  - **局部性**：最近用得少，未来可能也用得少
+  - 似乎是 **MIN 的优秀近似**
   - 实现：
-    - 链表：每次访问都将对应页移到链表头部，替换时删除链表尾部的页
-    - 页访问时需要立即更新链表
+    - 链表：**每次访问都将对应页移到链表头部，替换时删除链表尾部的页**
+    - **每次页访问时需要立即更新链表**
     - 性能差：链表操作需要很多指令
   - 实践中使用 LRU 的近似实现
 
-Stack property：当加物理内存时，不命中率不会增加 
+Stack property：**当加物理内存时，不命中率不会增加**
 - LRU 和 MIN 算法可以保证此性质
   - 它们向前/向后看 $X$ 个不同的物理页
   - 当物理内存增加到 $X+1$ 个页时，它们仍然会向前/向后看到原来的 $X$ 个页，加上一个新的不同的页
@@ -2191,8 +2202,8 @@ Clock 算法：
 - 指针最多前进 $N$ 次，$N$ 是物理页数量（当所有 use bit 都被设置）
   - 如果指针一边清空 use bit，OS 一边上下文切换重置 use bit，会不会永远找不到 victim?
   - 触发缺页的那个线程的帧不会被访问，因此至少总能找到它们作为 victim
-- 指针前进很慢是好事
-  - 缺页少，或很快能找到 use bit 为 0 的页
+- **指针前进很慢是好事**
+  - **缺页少，或很快能找到 use bit 为 0 的页**
 - 简单粗暴将物理页二分成两组
 
 Clock 算法的变种：Nth Chance  
@@ -2202,8 +2213,8 @@ Clock 算法的变种：Nth Chance
   - 检查 use bit：
     - 如果为 0，则**增加计数器**，若计数器达到 N，则替换该页
     - 如果为 1，则将其和计数器清零，继续前进一页
-- N 的取值：越大越接近 LRU，越小效率越高
-- 替换脏页的开销更大，可以给脏页更多机会
+- **N 的取值：越大越接近 LRU，越小效率越高**
+- **替换脏页的开销更大，可以给脏页更多机会**
 
 不需要硬件支持的脏位：利用只读位 W
 - 初始，标记所有页为只读，清除所有软件脏位
@@ -2222,12 +2233,12 @@ Clock 算法的变种：Nth Chance
 
 如果允许利用缺页，能否实现比 Clock 更优的替换策略？
 
-Second Chance List:  
+**Second Chance List**:  
 - 内存分为两部分：FIFO 的 Active list 和 LRU 的 Second Chance list
 - Active list 中的页有效，SC list 中的页无效
 - 若访问的页在 Active list 中：正常访问
 - 若访问的页不在 Active list 中：
-  - Active list 中溢出的页总是放到 SC list 队首，并标记为无效
+  - **Active list 中溢出的页总是放到 SC list 队首，并标记为无效**
   - 若在 SC list 中：将它移动到 Active list 队首，标记为可读写
   - 若不在 SC list 中：page in 到 Active list 队首，标记为可读写；page out SC list 队尾的页
 - 如果 SC list 中没有页，算法退化为 FIFO
@@ -2236,39 +2247,39 @@ Second Chance List:
   - 更少的磁盘访问——近似 LRU，长时间未用才会换出
   - 缺页开销更大
 
-Free list:  
+**Free list**:  
 - OS 维护一个空闲物理页列表
   - 在后台用 clock 算法填充
   - 脏页在进入 free list 前需要开始写回
 - 类似 VAX second-chance list：如果物理页在被回收前又被使用了，就直接中止换出
-- 缺页处理更迅速：可立即获取可用物理页
+- **缺页处理更迅速：可立即获取可用物理页**
 
 Reverse Page Mapping (Coremap):  
-- 当驱逐物理页时，需要无效化对应的页表项——需要物理页到虚拟页的映射
+- **当驱逐物理页时，需要无效化对应的页表项——需要物理页到虚拟页的映射**
 - 注意一个物理页可能被多个页表共享——多个页表项映射到同一物理页
 - 方法一：每个 page descriptor (Linux 中的物理页对象) 维护一个 PTE 链表。
   - 太昂贵
 - 方法二：每个 page descriptor 维护一个指向 VMA (Virtual Memory Area) 的指针，OS 从 VMA 中找对应的页表项
 
 物理页分配  
-- 每个进程得到相等还是不等份额的内存？
+- **每个进程得到相等还是不等份额的内存？**
   - Equal allocation: 每个进程份额相同
   - Proportional allocation: 每个进程份额与其 size 成正比
   - Priority allocation: 每个进程份额与其优先级成正比
-  - Page-Fault Frequency allocation: 若进程缺页频率过高，则增加其份额，否则减少其份额
+  - **Page-Fault Frequency allocation: 若进程缺页频率过高，则增加其份额，否则减少其份额**
     - 难以确定 upper bound 和 lower bound
-    - 不用 upper bound 和 lower bound，将进程的缺页频率排序，将缺页率低的进程的页给缺页率高的进程
+    - 不用 upper bound 和 lower bound，**将进程的缺页频率排序，将缺页率低的进程的页给缺页率高的进程**
 - 每个进程至少需要一定数量的页，以确保可以运行
 - Replacement Scope：
   - 进程可以驱逐所有物理页
   - 进程只能驱逐自己的物理页
 
-Thrashing:
+**Thrashing**:
 - 进程没有足够的页，不断触发缺页换入换出，实际进展很慢
 - 程序内存访问有时间局部性和空间局部性，一段时间内（如最近一万条指令）访问的一组页称为工作集
 - 如果分配的内存小于工作集，进程就会 thrashing
 - 所有进程的工作集之和就是当前的物理页需求，如果物理页需求大于物理内存大小，就会导致 thrashing
-  - 策略：此时挂起一些进程或换出一些进程，避免 thrashing，提高效率
+  - 策略：此时**挂起一些进程或换出一些进程**，避免 thrashing，提高效率
 
 Compulsory miss：  
 - 访问从未访问过的页（lazy loaded 或刚刚被换入）
@@ -2294,7 +2305,7 @@ Compulsory miss：
 - 内存变得廉价：服务器内存上 TB，小集群数十 TB
 - 数据中心网络：40 Gbps 吞吐量，1-3 us 延迟，RDMA primitives
 
-RDMA: Remote Direct Memory Access  
+RDMA: **Remote Direct Memory Access**  
 - 机器 A 想要读机器 B 的内存：
   - A 的 CPU 向 A 的 NIC 发送一个 RDMA 请求，A 的 NIC 将请求通过网络发送给 B
   - B 的 NIC 收到请求，通过 DMA 将 B 的内存拷贝到自己内部的缓冲区，通过网络发给 A 的 NIC
@@ -2310,19 +2321,19 @@ Setup:
   - 数百 CPU 核心
   - RDMA 网络
 - 目标
-  - 数据存放在内存中，用 RDMA 访问
-  - 数据和计算放在一起
+  - **数据存放在内存中，用 RDMA 访问**
+  - **数据和计算放在一起**
     - 传统模型中服务器存储数据，客户端执行应用
     - 对称模型：服务器既存储数据，也执行应用
 
-共享地址空间：  
+**共享地址空间**：  
 - 所有机器的内存属于同一个地址空间
 - 位置（属于哪台机器）、并发、故障处理都是透明的，编程者无需关心
 
 优化：
 - Locality awareness
   - 将一起被访问的数据放在一起
-  - 计算以 RPC 形式被发送的数据所在机器上被执行
+  - **计算以 RPC 形式被发送的数据所在机器上被执行**
   - 完成后再把数据发回去
 
 Transactions:  
@@ -2336,13 +2347,14 @@ Transactions:
 #### vLLM
 
 背景：服务 LLM 很慢且成本高昂
-- Auto-Regressive 架构的 GPU 利用率不高：batching 多个请求，并行化
+- Auto-Regressive 架构的 GPU 利用率不高：**batch 多个请求，并行化**
 - 然而 batchsize 被 KV cache 的低效内存管理所限制
-  - 先前系统的 KV cache 存储在一个按照最大长度 pre-allocated 的连续内存块中，导致严重的内部碎片化
-  - 而不同请求的 max length 可能不同，导致外部碎片化
+  - **先前系统的 KV cache 存储在一个按照最大长度 pre-allocated 的连续内存块中，导致严重的内部碎片化**
+  - **而不同请求的 max length 可能不同，导致外部碎片化**
 
 PagedAttention: 
-- 请求就像 OS 中的进程，内存被分为若干固定大小、连续的 KV blocks（每个可以存 4 个 token），就像 OS 中的页
+- 请求就像 OS 中的进程
+- 内存被分为若干固定大小、连续的 KV blocks（每个可以存 4 个 token），就像 OS 中的页
 - Block table 将逻辑块号映射到物理块号
 - Allocate on demand
 - 额外的重定向带来 10-15% 的开销
@@ -2353,9 +2365,9 @@ PagedAttention:
 当内存不够用时:
 - 选项 1：Swapping to CPU
 - 选项 2：Preempt and Recover (i.e. delete and recompute)
-- 两种选项都需要作用在整个请求上，因为请求的每一步都用到所有先前的 tokens
+- **两种选项都需要作用在整个请求上，因为请求的每一步都用到所有先前的 tokens**
 - 块大小较小时 swapping 开销较大
-- Recomputation 可以并行，较快
+- **Recomputation 可以并行，较快**
 - 最终选择：Request Preemption & Recovery
 
 和 OS paging 的异同：
@@ -2363,25 +2375,25 @@ PagedAttention:
   - OS 的页 <=> KV blocks：减轻碎片化
   - 进程间共享页 <=> 采样间共享 KV blocks：减少内存浪费
 - 不同点
-  - 单级块表：块表和数据相比占用空间很小
-  - Preemption & Recovery：抢占请求，通过 recomputation 恢复
+  - **单级块表：和数据相比，块表占用空间很小**
+  - **Preemption & Recovery：抢占请求，通过 recomputation 恢复**
 
 #### InfiniSwap
 
 背景：
 - 应用的工作集如果不能完全 fit 到内存中，性能就会显著下降
-- 集群中已分配的内存占 80%，但实际使用的只占 50%
+- **集群中已分配的内存占 80%，但实际使用的只占 50%**
 
 想法：  
-- 当机器 1 内存不够时，从其他机器的内存中拿
+- **当机器 1 内存不够时，从其他机器的内存中拿**
 - 不需要添加新的硬件，不需要修改现有应用
 - 可以容忍失败
 - 能够 scale
 
 方法：
-- 在虚拟内存系统之下做了一个 InfiniSwap Block Device，作为 swap space 和 request router
+- **在虚拟内存系统之下做了一个 InfiniSwap Block Device，作为 swap space 和 request router**
 - 本地磁盘作为 InfiniSwap block device 的异步 backup
-- 通过单边 RDMA 以及运行在远程机器上的 InfiniSwap Daemon，绕过远程机器的 CPU
+- **通过单边 RDMA 以及运行在远程机器上的 InfiniSwap Daemon，绕过远程机器的 CPU**
 - 以 slab 为单位，用分布式的分配算法（Power of Two Choices）来分配内存
 
 特点：
@@ -2389,40 +2401,40 @@ PagedAttention:
 
 #### AIFM
 
-Memory 是非弹性的，被物理内存容量所限制。
+Memory 是非弹性的，被物理内存容量所限制
 
-先前基于 OS paging 的方案（infiniSwap）性能不好：  
+先前基于 OS paging 的方案（InfiniSwap）性能不好：  
 - 语义 gap
   - 以页为单位导致 R/W amplification：只读一个字节，但要加载一整页
-  - OS 缺乏应用的知识，无法 prefetch：应用遍历链表，对 OS 而言就是随机访问
+  - OS 缺乏应用的知识，无法预取：应用遍历链表，对 OS 而言就是随机访问
 - 高内核开销
   - 缺页时从远程 swap in，浪费很多 CPU 时钟周期
 
 方法：  
 - Remotable Data Structure Library
-  - 提供数据结构 API，底层封装了 prefetcher
+  - **提供数据结构 API，底层封装了 prefetcher**
   - 解决了语义 gap
 - Userspace Runtime
-  - 在应用中 yield 以避免陷入内核态
+  - **在应用中 yield 以避免陷入内核态**
   - 解决了高内核开销
 - Pauseless Evacuator
-  - 无暂停地将本地的对象转移到远程机器
+  - **无暂停地将本地的对象转移到远程机器**
   - 解决了内存回收问题
 - Remote Agent
-  - 将计算转移到远程机器
+  - **将计算转移到远程机器**
   - 解决了网络带宽小于 DRAM 带宽的问题
 
 **和 InfiniSwap 的区别**：
-- InfiniSwap 在 kernel 中以 page 为单位，不需要修改应用实现
-- AIFM 的 userspace runtime 中，以对象为单位，需要改一些应用实现
+- **InfiniSwap 在 kernel 中以 page 为单位，不需要修改应用实现**
+- **AIFM 的 userspace runtime 中，以对象为单位，需要改一些应用实现**
 
 #### PipeSwitch
 
-目前深度学习的训练任务和推理任务常常在不同集群上运行。因为推理任务有明显的时间周期性（白天多凌晨少），如果能在相同的集群上同时运行训练任务和推理任务，就能更高效。
+目前深度学习的训练任务和推理任务常常在不同集群上运行。因为**推理任务有明显的时间周期性**（白天多凌晨少），如果能**在相同的集群上同时运行训练任务和推理任务**，就能更高效。
 
 目标：  
-- 多个深度学习任务的细粒度 multiplexing，要求 GPU 高效
-- 毫秒级上下文切换延迟和高吞吐量
+- **多个深度学习任务的细粒度 multiplexing，要求 GPU 高效**
+- **毫秒级上下文切换延迟和高吞吐量**
 
 方法：  
 - 上下文切换：
@@ -2437,27 +2449,28 @@ Memory 是非弹性的，被物理内存容量所限制。
 - 任务清理
 
 Pipelined model transmission and execution：
-- 深度学习模型是分层的
-- 将模型传输和执行并行：传输第 $i$ 层的同时可以执行第 $i-1$ 层
-- 模型传输被切分成若干次，需要多次调用 PCIe——粒度不能太细，否则 PCIe 调用开销大
-- 传输和执行的同步开销
-- 不以层为单位，而是以 group（多层）为单位，从而摊平前面的两个开销
+- **深度学习模型是分层的**
+- **将模型传输和执行并行：传输第 $i$ 层的同时可以执行第 $i-1$ 层**
+- 开销：
+  - 模型传输被切分成若干次，需要多次调用 PCIe——粒度不能太细，否则 PCIe 调用开销大
+  - 传输和执行的同步开销
+- 不以层为单位，而是**以 group（多层）为单位**，从而**摊平前面的两个开销**
 - 大大降低了模型传输的开销
 
 Unified memory management：  
-- 通过一个 Memory Daemon 统一管理显存
+- **通过一个 Memory Daemon 统一管理显存**
 
 Active-standby worker switching：  
-- 将每个任务的初始化切成两段，第一段不需要显存，可以在一开始就完成
-- 初始化的第二段在可以在调度后立即开始，和先前任务的清理并行，因为它只标记而不实际使用显存
+- **将每个任务的初始化切成两段，第一段不需要显存，可以在一开始就完成**
+- **初始化的第二段在可以在调度后立即开始，和先前任务的清理并行，因为它只标记而不实际使用显存**
 
 #### TGS
 
-核心思想：分享 GPU 核心以增强 GPU 利用率
+核心思想：**分享 GPU 核心以增强 GPU 利用率**
 
 深度学习训练任务有两种：
-- Production job：全速运行，不能接受性能损失
-- Opportunistic job：可以接受性能损失，利用空闲 GPU 核心
+- **Production job**：全速运行，不能接受性能损失
+- **Opportunistic job**：可以接受性能损失，利用空闲 GPU 核心
 
 先前工作：
 - 应用层：AntMan
@@ -2477,9 +2490,9 @@ Active-standby worker switching：
   - 根据 GPU 内核队列控制 opportunistic job
   - 但队列的状态不能很好反映剩余 GPU 资源，GPU 利用率低
 
-TGS：适应性的速率控制
-- 监控 production job 的 GPU 发送速率，保证其不受限制
-- 根据 production job 的速率动态调整 opportunistic job 的速率
+TGS：**适应性的速率控制**
+- **监控 production job 的 GPU 发送速率，保证其不受限制**
+- **根据 production job 的速率动态调整 opportunistic job 的速率**
 
 Transparent unified memory of TGS:  
 - 核心思想：利用 CUDA unified memory，透明地统一显存和 host memory
@@ -2487,10 +2500,10 @@ Transparent unified memory of TGS:
 - 显存 oversubscribed 时，TGS 改变虚拟显存映射，从而驱逐 opportunistic job 的显存到 host memory
 
 TGS 的特点：
-- 透明性：不需要修改应用
-- Performance isolation：opportunistic job 的性能不会影响 production job
+- **透明性**：不需要修改应用
+- **Performance isolation**：opportunistic job 的性能不会影响 production job
 - 高 GPU 利用率
-- Fault isolation
+- **Fault isolation**：opportunistic job 的错误不会影响 production job
 
 ## I/O
 
@@ -2510,32 +2523,32 @@ PCIe：
 - 不再是并行总线，而是一组串行链路（lane）
 - 速度不再受限，慢速设备不再拖累整体
 
-CPU 通过 device controller（可视为一个嵌入式的计算机）与 I/O 设备通信，有 port-mapped I/O 和 memory-mapped I/O 两种方式。
+**CPU 通过 device controller（可视为一个嵌入式的计算机）与 I/O 设备通信**，有 port-mapped I/O 和 memory-mapped I/O 两种方式。
 
 CPU 上也有很多 I/O 相关的部件，例如 Sky Lake 的 PCH (Platform Controller Hub)，它包含了 PCIe、USB、SATA 等控制器。
 
 I/O 的动作参数：
-- 数据粒度：字节 vs. 块
-- 访问模式：顺序 vs. 随机
-- 传输机制：programmed I/O vs. DMA
+- 数据粒度：**字节 vs. 块**
+- 访问模式：**顺序 vs. 随机**
+- 传输机制：**programmed I/O vs. DMA**
 
 Programmed I/O：
-- CPU 直接控制 I/O 设备和内存之间传输
+- **CPU 直接控制 I/O 设备和内存之间传输**
 - 硬件实现简单，容易编程
 - 传输消耗 CPU 时钟周期
 
 DMA（Direct Memory Access）：
-- 控制器直接控制 I/O 设备和内存之间传输
+- **控制器直接控制 I/O 设备和内存之间传输**，绕过 CPU
 - CPU 只需设置 DMA 控制器
 - DMA 控制器可以在 CPU 执行其他任务时传输数据
 - DMA 控制器可以在传输完成后中断 CPU，通知传输完成
 
 I/O 设备通知 OS 的方法：  
-- I/O 中断
+- **I/O 中断**
   - 设备生成中断来通知 OS
   - 容易处理不可预测的事件
   - 中断处理开销大
-- Polling】
+- **Polling**
   - OS 定期轮询设备的状态寄存器
   - 开销小
   - 轮询不频繁/不可预测的 I/O 事件浪费很多 CPU 时钟周期
@@ -2566,10 +2579,10 @@ I/O subsystem：
 - 随机访问性能差，顺序访问性能好
 
 硬盘结构：
-- 传输单元：扇区（sector）
-  - 盘片（surface）上连续的一圈扇区：磁道（track）
-  - 堆叠的磁道：柱面（cylinder）
-  - 磁头（head）在柱面上移动，读取或写入数据
+- 传输单元：**扇区**（sector）
+  - **盘片**（surface）上连续的一圈扇区：**磁道**（track）
+  - 纵向堆叠的磁道：**柱面**（cylinder）
+  - **磁头**（head）在柱面上移动，读取或写入数据
 - 扇区之间被不使用的 guard 区域分隔，减少写操作污染相邻磁道的概率
 - 只有最外一圈的磁道被使用
   
@@ -2577,21 +2590,24 @@ Shingled Magnetic Recording (SMR)：
 - 磁道重叠写入，增加存储密度
 
 读写操作需要三个阶段：
-- 寻道时间（seek time）：磁头移动到目标磁道
-- 旋转延迟（rotational latency）：等待目标扇区转到磁头下方
-- 传输时间（transfer time）：传输扇区数据
+- **寻道时间**（seek time）：磁头移动到目标磁道
+- **旋转延迟**（rotational latency）：等待目标扇区转到磁头下方
+- **传送时间**（transfer time）：传输扇区数据
 
 $$\text{Disk Latency} = \text{Queueing Time} + \text{Controller time} + \text{Seek Time} + \text{Rotational Latency} + \text{Transfer Time}$$
 
 磁盘性能算例：
 - 忽略 queueing time 和 controller time
 - 平均寻道时间 $5 ms$
-- 转速 $7200 rpm$，转一圈的旋转延迟 $60000 / 7200 = 8.33 ms$，平均旋转延迟 $8.33 / 2 = 4.17 ms$
-- 传送速率 $50 MB/s$，每个扇区 $4 KB$，一个扇区的传输时间 $4 / 50000 = 0.08 ms$
-- 读磁盘上一个随机扇区的延迟：$5 + 4.17 + 0.08 = 9.25 ms$
-- 若在同一个柱面上读，则不需要寻道时间
-- 读下一个相邻扇区则只需要传送时间
-- 寻道时间和旋转延迟是随机访问的主要开销
+- 转速 $7200 rpm$（即一秒转 $120$ 圈）。
+  - 转一圈的旋转延迟 $1/120 \times 1000 = 8.33 \text{ms}$
+  - 平均旋转延迟 $8.33 / 2 = 4.17 \text{ms}$
+- 传送速率 $50 MB/s$，每个扇区 $4 \text{KB}$
+  - 一个扇区的传输时间 $4 / 50000 = 0.08 \text{ms}$
+- 读磁盘上一个随机扇区的延迟：$5 + 4.17 + 0.08 = 9.25 \text{ms}$
+- **若在同一个柱面上读，则不需要寻道时间**
+- **若读下一个相邻扇区，则只需要传送时间**
+- **寻道时间和旋转延迟是随机访问的主要开销**
 
 磁盘控制器有许多精巧设计：
 - 扇区有精密的纠错机制
@@ -2603,22 +2619,22 @@ $$\text{Disk Latency} = \text{Queueing Time} + \text{Controller time} + \text{Se
 
 闪存：
 - 非易失性存储设备
-- 块级别随机访问
-- 读性能好，随机写性能差
-- 只能整块擦除
-- 写入次数越多，寿命越短
+- **块级别随机访问**
+- **读性能好，随机写性能差**
+- **只能整块擦除**
+- **写入次数越多，寿命越短**
 
 SSD：
 - 没有寻道和旋转延迟
 - 没有运动的部件：轻、能耗低、静音、抗冲击
 - 寿命有限
 - 读写性能不一致
-- 顺序读和随机读的带宽都很高
+- **顺序读和随机读的带宽都很高**
 
 写操作比较复杂
-- 只能写块中的空页
+- **只能写块中的空页**
 - 控制器维护一个空块的资源池，预留一定空间
-- 写比读慢十倍，擦除比写慢十倍
+- **写比读慢十倍，擦除比写慢十倍**
 - 可以一次性读写一个 chunk（4 KB）
 - 但一次性只能覆写整个 256 KB 的块
   - 擦除操作很慢
@@ -2627,21 +2643,21 @@ SSD：
 
 解决方法：
 - Layer of Indirection：
-  - 维护一个 Flash Translation Layer (FTL)，将逻辑块号（OS 看到的）映射到物理块号（flash memory controller 看到的）
+  - 维护一个 **Flash Translation Layer** (FTL)，将逻辑块号（OS 看到的）映射到物理块号（flash memory controller 看到的）
   - 可以自由地重新映射数据，而不影响 OS
 - Copy on Write:
-  - OS 更新数据时，不重写已有的页，而是将新数据写入空页
-  - 更新 FTL 映射，将逻辑块号映射到新物理块号
+  - **OS 更新数据时，不重写已有的页，而是将新数据写入空页**
+  - **更新 FTL 映射，将逻辑块号映射到新物理块号**
 - 从而：
-  - 小的写操作不需要擦除和重写整个块
-  - SSD 控制器可以在块之间分散负载，延长寿命
-  - 旧版本的页被 GC，擦除后加入空闲块池
+  - **小的写操作不需要擦除和重写整个块**
+  - **SSD 控制器可以在块之间分散负载，延长寿命**
+  - **旧版本的页被 GC，擦除后加入空闲块池**
 
 ### I/O Performance
 
 性能指标：
-- 响应时间（response time）/延迟（latency）：完成一个 operation 的时间
-- 带宽（bandwidth）/吞吐量（throughput）：operation 完成的速率
+- **响应时间**（response time）/ **延迟**（latency）：完成一个 operation 的时间
+- **带宽**（bandwidth）/ **吞吐量**（throughput）：operation 完成的速率
 
 I/O 性能的影响因素：
 - 软件路径（队列）
@@ -2658,7 +2674,7 @@ I/O 性能的影响因素：
 
 如果请求以 burst 的形式到达，尽管平均 arrival time 不变，平均利用率很低，但 queuing delay 也可能很高。
 
-指数分布：
+**指数分布**：
 - PDF: $f(x) = \lambda e^{-\lambda x}$
 - CDF: $F(x) = 1 - e^{-\lambda x}$
 - 指数分布刻画的是一个发生概率关于时间均匀分布的随机事件，连续两次发生的时间间隔
@@ -2672,14 +2688,14 @@ I/O 性能的影响因素：
 随机分布的数字特征：
 - 均值：$E(X) = \sum p(x) \cdot x$
 - 方差：$Var(X) = E(X^2) - E^2(X)$
-- Squared Coefficient of Variation (SCV)：$SCV = Var(X) / E^2(X)$
+- Squared Coefficient of Variation (**SCV**)：$SCV = Var(X) / E^2(X)$
   - SCV = 1 时，分布是指数分布
   - SCV = 0 时，分布是常数分布
   - 磁盘响应时间的 SCV 约为 $1.5$，大多数响应时间小于均值
 
 Queuing theory：
 - 假设：
-  - arrival rate 等于 departure rate（系统处于均衡）
+  - **arrival rate 等于 departure rate**（系统处于均衡）
     - departure rate 不可能超过 arrival rate
     - 如果 arrival rate 大于 departure rate，则系统过载，队列无限增长
   - Arrival 和 departure 都可以用概率分布表示
@@ -2696,12 +2712,12 @@ Queuing theory：
   - $T_{q}$：queuing delay
     - 总延迟 $T = T_{ser} + T_{q}$
   - $L_{q}$：队列长度, $L_{q} = \lambda \cdot T_{q}$（Little's Law）
-    - 水库水量等于进水速率乘水停留的时间
+    - **水库水量等于进水速率乘水停留的时间**
     - 假设系统运行 $T$ 时间，则 $T_{q} = \frac{L_q T}{\lambda T}$（平均 queuing delay 等于所有顾客在队列中等待的时间除以顾客数）
-- 结论
-  - M/M/1 队列（到达和服务时间都服从指数分布，单个服务器）：
+- **结论**
+  - M/M/1 队列（**到达和服务时间都服从指数分布，单个服务器**）：
     - $T_{q} = T_{ser} \cdot \frac{u}{1 - u}$
-  - M/G/1 队列（到达时间服从指数分布，服务时间服从任意分布，单个服务器）：
+  - M/G/1 队列（**到达时间服从指数分布，服务时间服从任意分布，单个服务器**）：
     - $T_{q} = T_{ser} \cdot \frac{1}{2} (1 + C) \cdot \frac{u}{1 - u}$
     - 代入 $C = 1$ 就得到上面的结果
 
@@ -2720,29 +2736,29 @@ Queuing theory：
 - 优化性能瓶颈
 - 利用队列：
   - 队列可以吸收突发负载，平滑化流
-  - admission control：有限长度队列
-    - 限制了延迟，但引入了不公平和活锁
+  - admission control：**有限长度队列**
+    - **限制了延迟，但引入了不公平和活锁**
 
 磁盘性能最高的时候：
-- 大的顺序访问
-- 很多的访问以至于它们可以被 piggybacked（reorder 队列，使同一个磁道上的请求连续）
+- **大的顺序访问**
+- 很多的访问以至于它们可以被 piggybacked（**reorder 队列，使同一个磁道上的请求连续**）
 - bursts 既是挑战（队列变长、延迟增加）也是机遇（piggyback 和 batching（一次上下文切换处理多个请求））
 
-Disk scheduling：
+**Disk scheduling**：
 - FIFO: 对请求方公平，但不能很好地 piggyback
-- SSTF (Shortest Seek Time First):  
-  - 优先处理离磁头最近的请求
+- **SSTF** (Shortest Seek Time First):  
+  - **优先处理离磁头最近的请求**
   - 虽然叫 SSTF，但旋转时间也需要考虑在内
-  - 可能导致 starvation
-- SCAN：
+  - 可能导致 **starvation**
+- **SCAN**：
   - 类似 Elevator algorithm
-  - 在磁头移动方向上的最近请求优先
+  - **在磁头移动方向上的最近请求优先**
   - 从外侧扫描到内侧，然后再从内侧扫描到外侧
   - 没有 starvation
-- C-SCAN（Circular SCAN）：
-  - 磁头从外侧扫描到内侧，然后直接跳到外侧继续扫描
+- **C-SCAN**（Circular SCAN）：
+  - **磁头从外侧扫描到内侧，然后直接跳到外侧继续扫描**
   - 保证了每个请求都能被处理
-  - 比 SCAN 更公平，不偏心中间的磁道
+  - **比 SCAN 更公平，不偏心中间的磁道**
 
 Network I/O：
 - 和 disk I/O 类似
@@ -2779,7 +2795,7 @@ I/O 系统的栈结构中，文件系统是中间的支柱，为 I/O API 和系�
     - Physical block，通常 4 KB 大小
     - Erasure page
 
-**文件系统**：OS 中将硬盘等设备的块接口转换为文件、目录等的 layer
+**文件系统**：**OS 中用文件、目录等接口包装硬盘等设备的块接口的 layer**
 - 经典 OS 情形：受限的硬件接口（array of blocks）被转换为有如下性质的接口
   - Naming：可以通过名字查找文件
   - Organization：文件可以组织成目录树，并被映射到物理块
@@ -2797,12 +2813,12 @@ I/O 系统的栈结构中，文件系统是中间的支柱，为 I/O API 和系�
 - 大多数文件很小
 - 大多数字节被包含在大文件中
 
-目录：
-- 目录是特殊的文件，它包含其下文件名到 file number 的映射
-  - file number 对应的可以是文件，也可以是另一个目录
-  - 每一条文件名到 file number 的映射称为目录项（directory entry）
-- 进程不能直接访问目录的 raw bytes，`read` 系统调用在目录上不 work。`readdir` 可以遍历目录项，但不向进程暴露其 raw bytes
-  - 因为不能让进程修改目录中的映射
+**目录**：
+- 目录是特殊的文件，它包含其下**文件名到文件号（file number）的映射**
+  - 文件号对应的可以是文件，也可以是另一个目录
+  - **目录项**（directory entry）：每一条文件名到文件号的映射
+- **进程不能直接访问目录的 raw bytes**，`read` 系统调用在目录上不 work。`readdir` 可以遍历目录项，但不向进程暴露其 raw bytes
+  - 因为**不能让进程修改目录中的映射**
 - `open`、`creat` 会遍历目录结构体，`mkdir`、`rmdir` 会添加或删除目录项。
 - 解析 `/my/book` 的过程：
   - 读根目录的文件头（它在磁盘上的固定位置）
@@ -2810,7 +2826,7 @@ I/O 系统的栈结构中，文件系统是中间的支柱，为 I/O API 和系�
   - 找到 `my` 目录项后，读 `my` 目录的文件头
   - 读 `my` 目录的第一个数据块，线性地搜索 `book` 目录项
   - 找到 `book` 目录项后，读 `book` 目录的文件头
-- 当前工作目录（current working directory）：Per-address-space 的指向当前工作目录的指针，用于文件名解析，使用户可以使用相对路径名
+- 当前工作目录（current working directory）：**Per-address-space** 的指向当前工作目录的指针，用于文件名解析，使用户可以使用**相对路径名**
 
 磁盘管理：
 - 磁盘就是扇区的数组
@@ -2828,7 +2844,7 @@ I/O 系统的栈结构中，文件系统是中间的支柱，为 I/O API 和系�
 
 文件系统设计的重要因素：
 - 磁盘性能（重要）
-  - 最大化顺序访问，减少寻道
+  - **最大化顺序访问**，减少寻道
 - read/write 前 open
   - 权限检查，提前查找文件资源
 - 文件使用时，大小固定
@@ -2849,10 +2865,10 @@ I/O 系统的栈结构中，文件系统是中间的支柱，为 I/O API 和系�
   - free space map
 
 Linux 中的两个 open-file table：
-- Per-process open-file table：每个进程独有，位于 PCB 中，将文件描述符（fd）映射到 system-wide file table 的条目
+- **Per-process open-file table**：每个进程独有，位于 PCB 中，将文件描述符（fd）映射到 system-wide file table 的条目
   - 不同进程的相同 fd 无关，不一定指向同一个文件
   - 0、1、2 分别指向标准输入、标准输出、标准错误
-- System-wide open-file table：所有进程共享的内核全局数据结构，包含当前文件偏移、访问模式（O_RDONLY、O_WRONLY、O_RDWR）、状态标志（O_APPEND、O_NONBLOCK）、引用计数和指向 inode/vnode 的指针
+- **System-wide open-file table**：所有进程共享的内核全局数据结构，包含当前文件偏移、访问模式（O_RDONLY、O_WRONLY、O_RDWR）、状态标志（O_APPEND、O_NONBLOCK）、引用计数和**指向 inode/vnode 的指针**
   - **每个 `open` 系统调用都会在 system-wide open-file table 中创建一个条目**
 - 例子
   - 进程先打开文件，然后调用 `fork` 创建子进程，则
@@ -2873,41 +2889,42 @@ Linux 中的两个 open-file table：
 ### Case Study: File Allocation Table (FAT)
 
 FAT：
-- 假设已经有目录结构体（可以将路径名解析为 file number）
-- Disk storage 被组织为一个有 $N$ 个块的数组
-- FAT 是一个有 $N$ 个表项的数组，表项存储每个块的状态，负责 file number 到块的映射
-- 一个文件的所有块对应的 FAT 表项被组织成一个链表
-  - 链表的首元素（root block）的索引就是 file number
+- 假设已经有目录结构体（可以将路径名解析为文件号）
+- Disk storage 被组织为一个**有 $N$ 个块的数组**
+- FAT 有 $N$ 个表项
+  - 每个表项负责**文件号到块的映射**
+- **一个文件的所有块对应的 FAT 表项被组织成一个链表**
+  - 链表的首元素（root block）的索引就是文件号
   - 一个文件不一定被映射到连续的块
 - file_read $31, \langle 2, x \rangle$：FAT 中索引为 $31$ 的表项为链表头，此链表的索引为 $2$ 的块中的索引为 $x$ 的字节
-- 文件偏移：文件块号（即该文件对应的块链表中对应块的索引）和块内偏移量
+- 文件偏移：**文件块号**（即该文件对应的块链表中对应块的索引）和**块内偏移量**
 - 未使用的块被标记为空闲（free）
   - 扫描空闲块，或者维护 free list
-- FAT 被存储在硬盘上（需要被持久性地保存，不能存在 RAM 里）
-- 格式化：清零所有块，将所有 FAT 表项标记为 free
-- 快速格式化：只将所有 FAT 表项标记为 free
+- **FAT 被存储在硬盘上**（需要被持久性地保存，不能存在 RAM 里）
+- 格式化：**清零所有块，将所有 FAT 表项标记为 free**
+- 快速格式化：**只将所有 FAT 表项标记为 free**
 
 FAT 目录
-- 目录是一个特殊的文件，它被组织成一个目录项（文件名到 file number 的映射）的链表
+- 目录是一个特殊的文件，它被组织成一个目录项（文件名到文件号的映射）的链表
 - 目录中有空闲的空间用于添加新的目录项
-- FAT 中，文件的 attribute 被存储在目录中，而不是在文件自己里
+- FAT 中，**文件的 attribute 被存储在目录中，而不是在文件自己里**
 - 根目录被存在硬盘上一个指定位置（FAT 中为 block 2，FAT 没有 block 0 和 block 1）
 
 讨论：
-- 给定 file number 找到对应的块的时间：找第一个块 $O(1)$，找其他的块 $O(N)$，其中 $N$ 是文件块的个数
-- 不对文件的 block layout 做保证，即不一定连续存储
-- 顺序访问性能：由于文件不一定连续存储，性能没有保证
-- 随机访问性能：需要遍历 FAT 链表才能找到对应块，性能较差
-- 碎片化：没有碎片
-- 小文件友好
-- 大文件不友好：不一定连续存储，随机访问性能差
+- 给定文件号找到对应的块的时间：找第一个块 $O(1)$，找其他的块 $O(N)$，其中 $N$ 是文件块的个数
+- 不对文件的 block layout 做保证，即**不一定连续存储**
+- 顺序访问性能：**由于文件不一定连续存储，性能没有保证**
+- 随机访问性能：**需要遍历 FAT 链表才能找到对应块，性能较差**
+- 碎片化：**没有碎片**
+- **小文件友好**
+- **大文件不友好**：不一定连续存储，随机访问性能差
 
 ### Case Study: Unix File System
 
 Inode：
-- File number（inumber）是 inode 数组的索引
-- 每个 inode 对应一个文件，包含其元数据
-  - 文件元数据和文件本身关联，而不是像 FAT 那样存储在目录中
+- **File number（inumber）是 inode 数组的索引**
+- **每个 inode 对应一个文件，包含其元数据**
+  - **文件元数据和文件本身关联**，而不是像 FAT 那样存储在目录中
 - Inode 通过一个多级树结构组织文件对应的块：
   - 12 个直接指针，每个直接指向一个 4 KB 块，共可索引 48 KB 数据
   - 1 个一级间接指针，指向一个包含 1024 个指针的块（一个指针大小 4 字节），每个指针指向一个 4 KB 块，共可索引 4 MB 数据
@@ -2918,52 +2935,52 @@ Inode：
   - 第二次通过指针块访问 block 23
 
 Berkeley Fast File System (FFS)：
-- 早期 Unix 和 DOS/Windows FAT 文件系统中，文件头（inode）被存放在最外层柱面（cylinder），且大小固定。这带来许多问题
-  - 所有 inode 都在一个篮子，一次 head crush 可能损坏所有文件
-  - inode 和对应的文件距离很远，导致不必要的寻道
+- 早期 Unix 和 DOS/Windows FAT 文件系统中，**文件头**（inode）**被存放在最外层柱面**（cylinder），且大小固定。这带来许多问题
+  - 所有 inode 都**在一个篮子**，一次 head crush 可能损坏所有文件
+  - **inode 和对应的文件距离很远**，导致不必要的寻道
   - 创建文件时不知道它将会有多大（unix 大多数写入都是追加），无法确定分配多少连续空间
-- 解决方法：Block Groups
+- 解决方法：**Block Groups**
   - 盘面被分为多个 block group，每个 block group 包含
-    - 特定目录的数据块
-    - free space bitmap
-    - inode 数组
-  - 为文件分配新块时采用 first-fit 策略
+    - **特定目录的数据块**
+    - **free space bitmap**
+    - **inode 数组**
+  - 为文件分配新块时采用 **first-fit 策略**
     - 小文件会填补 free space bitmap 前部的小洞
     - 而大文件能在 bitmap 后部找到大块连续空间
   - 每个 block group 保持至少 10% 的空余空间
 - FFS inode 布局的优点：
-  - 小目录的数据和文件头可以在同一个柱面，减少寻道
-  - 文件头比块小很多（几百字节），一次性能取出多个文件头
-  - 可靠性：磁盘不会一损俱损
+  - **小目录的数据和文件头可以在同一个柱面，减少寻道**
+  - **文件头比块小很多（几百字节），一次性能取出多个文件头**
+  - **可靠性：磁盘不会一损俱损**
 
 旋转延迟问题：
 - 读一个扇区 -> 处理 -> 读下一个扇区
   - 在处理的同时，磁盘旋转过了下一个扇区，导致连续读取时一直错位，旋转延迟很高
-- 解决方法一：skip sector positioning
-  - 将文件隔块存储
+- 解决方法一：**skip sector positioning**
+  - **将文件隔块存储**
   - 可以由 OS 或现代磁盘控制器实现
-- 解决方法二：read-ahead
-  - 预读下一个扇区
+- 解决方法二：**read-ahead**
+  - **预读下一个扇区**
   - 可以由 OS 或现代磁盘控制器（带 RAM 作为缓冲区）实现
 
 Unix 4.2 BSD FFS：
 - 优点
-  - 大文件和小文件都可以高校存储
-  - 大文件和小文件都有较好的局部性（连续存储）
-  - 文件头和文件数据之间也有较好的局部性
-  - 不需要去碎片化
+  - **大文件和小文件都可以高效存储**
+  - 大文件和小文件都有较好的**局部性**（**连续存储**）
+  - **文件头和文件数据之间也有较好的局部性**
+  - **不需要去碎片化**
 - 缺点
-  - 很小的文件效率不高（单字节的文件也需要 inode 和一个数据块，一共占用两个块）
-  - 对连续存储的文件来说，inode 编码不够高效（每个数据块都需要一个指针，但一组连续块只需要一个指针）
+  - 很小的文件效率不高（**单字节的文件也需要 inode 和一个数据块，一共占用两个块**）
+  - **对连续存储的文件来说，inode 编码不够高效**（**每个数据块都需要一个指针，但一组连续块实际上只需要一个指针**）
   - 需要保留 10~20% 的空闲空间以防止碎片化
 
-硬链接（hard link）：
+**硬链接**（hard link）：
 - 将文件名映射到目录结构体中的文件号
 - 当文件被创建时，第一个硬链接同时被创建
 - `link` 和 `unlink` 系统调用可以创建和删除硬链接
 - inode 维护引用计数，追踪文件被多少硬链接引用。当引用计数为 0 时，文件被删除
 
-软链接/符号链接（soft link, symbolic link）：
+**软链接 / 符号链接**（soft link, symbolic link）：
 - 普通目录项将文件名映射到 file number
 - 符号链接目录项将文件名映射到另一个文件名
 - 如果目标路径不存在，则为悬空链接（dangling link）
@@ -2982,38 +2999,38 @@ Unix 4.2 BSD FFS：
   - 线性查找目录项，效率低
   - 找一个文件需要遍历整个目录
 - B 树
-  - 文件名的哈希作为 B 树的键
+  - **文件名的哈希作为 B 树的键**
 
 ### Case Study: New Technology File System (NTFS)
 
 NTFS：
 - 现代 Windows 的默认文件系统
-- 变长的 extent，而不是固定大小的 block
-- Master File Table（MFT）：
+- **变长的 extent，而不是固定大小的 block**
+- **Master File Table**（MFT）：
   - 对应 FAT 或 inode array
   - 每个表项最大 1 KB，对应一个文件或目录
 
 MFT 表项：
 - 四个部分：
-  - Standard Information（SI）：文件的元数据，如创建时间、修改时间、权限
-  - File Name（FN）
-  - Data Attribute（DA）：文件数据，以键值对的形式存储
-  - 空闲空间
-- 小文件：数据直接存放在 data attribute 中
-- 中等大小的文件：存 extent 的指针（start 和 length）
-- 大文件：存指向 MFT 表项的指针（相当于间接指针）和指向 extent 的指针
-- 超大文件：存装有 MFT 表项的 extent 的指针（相当于二级间接指针）和其他指针
+  - **Standard Information**（SI）：文件的元数据，如创建时间、修改时间、权限
+  - **File Name**（FN）
+  - **Data Attribute**（DA）：文件数据，以键值对的形式存储
+  - **空闲空间**
+- 小文件：**数据直接存放在 data attribute 中**
+- 中等大小的文件：**存 extent 的指针**（start 和 length）
+- 大文件：**存指向 MFT 表项的指针**（相当于间接指针）和指向 extent 的指针
+- 超大文件：**存装有 MFT 表项的 extent 的指针**（相当于二级间接指针）和其他指针
 
 NTFS 目录：
 - 实现为 B 树
-- 文件号指明了文件在 MFT 中的表项索引
+- **文件号指明了文件在 MFT 中的表项索引**
 - MFT 表项包含文件名
 - 硬链接：MFT 表项中包含多个文件名
 
 ### Buffer Cache
 
-Buffer cache：
-- System-wide
+**Buffer cache**：
+- **System-wide**
 - 内核需要将硬盘块拷贝到主存中，才能读写其内容
 - 被缓存的是文件系统中的四个组件
   - 数据块
@@ -3035,36 +3052,36 @@ Buffer cache：
 - buffer cache 完全由 OS 软件实现
 - 块换入换出缓存不是原子操作
 - 替换策略
-  - LRU：完整 LRU 实现的开销是可承担的
+  - LRU：**完整 LRU 实现的开销是可承担的**
     - 优点：只要内存装得下工作集，综合性能很好
-    - 缺点：当应用扫描整个文件系统时，不断缓存一次性文件
+    - 缺点：**当应用扫描整个文件系统时，不断缓存一次性文件**
   - 有的系统可以让应用选择替换策略
-  - Use Once 策略：块被访问之后就被丢弃
-- Cache size：
+  - **Use Once 策略：块被访问之后就被丢弃**
+- **Cache size**：
   - 物理内存既要给 buffer cache 用，也要给虚拟内存用
   - buffer cache 太大影响多任务能力
   - 太小又导致磁盘 I/O 过多（装不下工作集，频繁换入换出）
-  - 解决方法：动态调整 buffer cache 大小以求平衡
+  - 解决方法：**动态调整 buffer cache 大小以求平衡**
 
 文件系统预取
-- Read Ahead Prefetching：
+- **Read Ahead Prefetching**：
   - 大多数文件访问都是顺序的：预取当前读请求的块后续的块
-  - 电梯算法可以高效地交错并发应用的预取
+  - **电梯算法可以高效地交错并发应用的预取**
 - 预取太多：其他应用的磁盘请求的延迟增加
-- 预取太少：并发文件请求中，磁盘寻道和旋转延迟增加
+- 预取太少：并发文件请求中，**磁盘寻道和旋转延迟增加**
 
-Delayed Writes：Buffer cache 是一个写回（write-back）缓存，它会将写操作推迟到数据块被换出时：
+**Delayed Writes**：Buffer cache 是一个写回（write-back）缓存，它会将写操作推迟到数据块被换出时：
 - Buffer cache 满，数据块被驱逐
-- Buffer cache 周期性 flush（预防崩溃数据丢失）
+- Buffer cache **周期性 flush**（**预防崩溃数据丢失**）
 - delayed writes 的优点：
-  - `write` 系统调用快速返回用户，不需要等待磁盘 I/O 完成
-  - 磁盘调度器可以对写请求重新排序，以提高性能（电梯算法）
-  - 推迟块分配，一次性分配多个块，更容易使块连续，减少碎片化
-  - 如果只是临时文件，可以避免不必要的磁盘 I/O
+  - `write` 系统调用**快速返回用户**，不需要等待磁盘 I/O 完成
+  - 磁盘调度器可以**对写请求重新排序**，以提高性能（**电梯算法**）
+  - **推迟块分配，一次性分配多个块，更容易使块连续**，减少碎片化
+  - **如果只是临时文件，可以避免不必要的磁盘 I/O**
 
 对比 buffer cache 与 demand paging：
-- LRU 开销对 demand paging 来说太大，只能用近似算法替代；但 buffer cache 可以使用完整 LRU
-- Demand paging 在内存接近满时驱逐，buffer cache 除此之外还会周期性 flush，以最小化崩溃时的数据丢失
+- LRU 开销对 demand paging 来说太大，只能用近似算法替代；但 **buffer cache 可以使用完整 LRU**
+- Demand paging 在内存接近满时驱逐，buffer cache 除此之外还会**周期性 flush，以最小化崩溃时的数据丢失**
 
 ### Durable File Systems
 
@@ -3083,8 +3100,8 @@ Delayed Writes：Buffer cache 是一个写回（write-back）缓存，它会将�
   - 一般比 availability 更强，也包括 security、fault tolerance/durability
 
 让文件系统 durable：
-- 磁盘块包含 Reed-Solomon 纠错码（Error Correction Code, ECC），从小的磁盘缺陷中恢复数据
-- 确保写操作短期内有效
+- 磁盘块包含 **Reed-Solomon 纠错码**（Error Correction Code, **ECC**），从小的磁盘缺陷中恢复数据
+- **确保写操作短期内有效**
   - 放弃 delayed writes
   - 为 buffer cache 中的脏块采用 battery-backed RAM（non-volatile RAM or NVRAM）
 - 确保写操作长期有效
@@ -3092,18 +3109,18 @@ Delayed Writes：Buffer cache 是一个写回（write-back）缓存，它会将�
 
 RAID（Redundant Array of Inexpensive Disks）：
 - 目标：可靠、性能、容量
-- 虚拟化存储：多个物理磁盘被抽象为一个逻辑磁盘
+- **虚拟化存储**：**多个物理磁盘被抽象为一个逻辑磁盘**
 - RAID 1：Disk mirroring/shadowing
   - 每个磁盘都有一个“影子”
-  - 写入时同时写入两个磁盘：写带宽减半
-  - 读时可以从任意一个磁盘读取
+  - **写入时同时写入两个磁盘：写带宽减半**
+  - **读时可以从任意一个磁盘读取**
   - 数据恢复：
     - 换用影子磁盘，将数据复制到另一块磁盘
     - hot spare：预留备胎磁盘以供替换
   - 适合高 I/O、高可用性环境
   - 最昂贵：100% 容量开销
 - RAID 5：High I/O Rate Parity
-  - 数据被分割成 $4$ 个块，分布在多个磁盘上（$D_0$ 在磁盘 $0$，$D_1$ 在磁盘 $1$，...，$P_0$ 在磁盘 $4$）
+  - **数据被分割成 $4$ 个块，分布在 $5$ 个磁盘上**（$D_0$ 在磁盘 $0$，$D_1$ 在磁盘 $1$，...，$P_0$ 在磁盘 $4$）
   - 奇偶校验块：$P_0 = D_0 \oplus D_1 \oplus D_2 \oplus ...$
     - 因为异或就是模 $2$ 的加法
   - 摧毁任一磁盘，仍可恢复完整数据
@@ -3132,17 +3149,16 @@ Reliability 问题
 -  单个文件操作可能涉及多个物理磁盘块：
   - inode、间接指针的磁盘块、free space map、数据块
   - 扇区重映射
-  - 但在物理层面，操作是原子的
 - 但在物理层面，操作是原子的
-- 一系列物理操作过程中间的崩溃或断电可能使系统处于不一致状态
+- **一系列物理操作过程中间的崩溃或断电可能使系统处于不一致状态**
 - 例如，银行转账时，在取出钱和存入钱之间发生了断电，导致钱丢失
 
 两种解决方法：
-- Careful Ordering and Recovery
-- Versioning and Copy-on-Write
+- **Careful Ordering and Recovery**
+- **Versioning and Copy-on-Write**
 
 Careful Ordering
-- 以特定顺序执行文件系统操作，使得操作序列可以被安全地打断
+- **以特定顺序执行文件系统操作，使得操作序列可以被安全地打断**
   - 分配数据块 => 令 inode 指向数据块 => 更新 free space map => 更新目录
   - **先写数据，再更新目录项**，否则无法发现是否被打断
 - 崩溃后恢复：
@@ -3167,12 +3183,12 @@ Careful Ordering
 - 问题：扫描时间复杂度和磁盘大小成正比
 
 Copy-on-Write
-- 不覆写已有的数据块并更新 inode，而是 Copy-on-Write 更新数据所在的块，并通过指针复用旧版本未修改的块
+- **不覆写已有的数据块并更新 inode，而是 Copy-on-Write 更新数据所在的块，并通过指针复用旧版本未修改的块**
 - 所有修改完成后，单次指针切换更新根节点：原子操作
 - 看似昂贵，但
-  - 可以 batch 更新
-  - 几乎所有写请求都可以并行
-  - 追加式的写天然是顺序的
+  - 可以 **batch 更新**
+  - **几乎所有写请求都可以并行**
+  - **追加式的写天然是顺序的**
 - 应用
   - NetApp 的 WAFL（Write Anywhere File Layout）
   - ZFS, OpenZFS
@@ -3185,17 +3201,17 @@ Copy-on-Write
     - 维护一个日志，延迟更新，直到 block group 被激活时
 
 更通用的 reliability 解决方法：
-- 用事务（transaction）完成原子操作
+- 用**事务**（transaction）完成原子操作
   - 保证单个文件操作的一系列连续子操作能原子地完成
-  - 如果中途崩溃，文件系统的状态只有两种可能：
-    - 完成了所有子操作
-    - 没有完成任何子操作
+  - **如果中途崩溃，文件系统的状态只有两种可能**：
+    - **完成了所有子操作**
+    - **没有完成任何子操作**
   - 大部分文件系统和应用都有应用
 - 为媒介 failure 提供冗余：媒介上的冗余表示（ECC）、跨媒介的备份（RAID）
 
 事务
 - 事务是将系统从一个一致状态转变为另一个一致状态的原子性的读写序列
-  - 相当于同步中的临界区
+  - **相当于同步中的临界区**
   - FFS 也可以理解为事务的一种
 - 典型结构：将一系列更新封装为一个事务
   - Begin Transaction：获得事务 ID
@@ -3206,10 +3222,10 @@ Copy-on-Write
   - 追加式写入
     - 不可变性和事件发生的顺序性
   - Seal the commitment：事务完成时写入日志
-  - 日志数据强制写入磁盘（或 NVRAM），日志自身不能丢失
+  - **日志数据强制写入磁盘**（或 NVRAM），日志自身不能丢失
 - Journaled 文件系统和 Log structured 文件系统的区别
-  - Journaled 文件系统：日志是用于恢复的辅助结构，文件数据和元数据仍然存储在传统的、原地更新的文件系统中
-  - Log structured 文件系统：日志是文件系统的主要结构，所有数据和元数据都存储在日志中。不原地更新，而是 Copy-on-Write 更新数据和元数据
+  - Journaled 文件系统：**日志是用于恢复的辅助结构，文件数据和元数据仍然存储在传统的、原地更新的文件系统中**
+  - Log structured 文件系统：**日志是文件系统的主要结构，所有数据和元数据都存储在日志中。不原地更新，而是 Copy-on-Write 更新数据和元数据**
 
 Journaling 文件系统：
 - 日志分为三部分：
@@ -3218,10 +3234,10 @@ Journaling 文件系统：
     - tail 指针指向其末尾
   - 正在写入日志的事务
     - head 指针指向当前写入的位置
-- 先将更新写入日志，然后再实际更新文件系统中的数据结构（inode 指针、目录映射、...）
-- 垃圾回收：当实际的更新完成后，清除它在日志中的记录
+- **先将更新写入日志，然后再实际更新文件系统中的数据结构**（inode 指针、目录映射、...）
+- 垃圾回收：**当实际的更新完成后，清除它在日志中的记录**
 - Linux 采用了类 FFS 的 ext2 文件系统，并在其上添加了 journal，得到了 ext3 文件系统
-  - 选项：将所有数据写入 journal，还是只写元数据
+  - 选项：**将所有数据写入 journal，还是只写元数据**
 - 创建文件：
   1. 根据 free space map 找到空闲数据块
   2. 找到空闲 inode 表项
@@ -3237,11 +3253,11 @@ Journaling 文件系统：
   - 恢复时扫描日志，未提交的事务直接被丢弃
     - 磁盘未被实际更新
   - 已提交的事务被保留，应用到文件系统中（可以立即应用，也可让其稍后自然完成）
-- 整个 Journaling 机制的意义：原子化地更新文件系统，崩溃不会导致文件系统不一致
+- 整个 Journaling 机制的意义：**原子化地更新文件系统，崩溃不会导致文件系统不一致**
 - 代价较高：
-  - 所有数据必须被写入两次
-  - 现代文件系统只将元数据写入日志
-    - 文件内容数据直接裸着写入文件系统，不受日志保护
+  - **所有数据必须被写入两次**
+  - **现代文件系统只将元数据写入日志**
+    - **文件内容数据直接裸着写入文件系统，不受日志保护**
 
 ### Distributed Systems
 
@@ -3254,15 +3270,15 @@ Journaling 文件系统：
 分布式系统：
 - 愿景
   - 获得很多小计算机廉价、简单
-  - 增量式地提高功耗
+  - **增量式地提高功耗**
   - 用户可以完全控制某些组件
-  - 用户间合作容易很多：有网络文件系统就不需要微信传来传去
+  - **用户间合作容易很多**：有网络文件系统就不需要微信传来传去
 - 现实
-  - 差可用性：依赖所有电脑都在线
+  - **差可用性**：依赖所有电脑都在线
     - Lamport: "A distributed system is one in which the failure of a computer you didn't even know existed can render your own computer unusable."
-  - 差可靠性：任一电脑崩溃都可能造成数据丢失
-  - 差安全性：所有人都能闯进系统
-  - 必须定位共享数据的多份拷贝
+  - **差可靠性**：任一电脑崩溃都可能造成数据丢失
+  - **差安全性**：所有人都能闯进系统
+  - **必须定位共享数据的多份拷贝**
   - Trust/Security/Privacy/Denial of Service
     - Lamport: "A distributed system is one where you can't do work because some computer you didn't even know existed is successfully coordinating an attack on my system."
 - 透明性：将系统的复杂性隐藏在接口背后，从而使用户不必关心
@@ -3289,7 +3305,7 @@ Journaling 文件系统：
   - `receive(buffer, mbox)`：等待 mbox 的来信，将其拷贝到 buffer 中
     - 如果有线程在此 mbox 上休眠，唤醒它
 
-分布式共识达成：
+**分布式共识达成**：
 - 共识问题
   - 多个结点都提出值
   - 有的结点正常，有的崩溃无响应
@@ -3298,7 +3314,7 @@ Journaling 文件系统：
 - 共识决定需要是 durable 的
 
 Two General's Paradox：
-- 不可靠的网络下，两个实体无法达成共识
+- **不可靠的网络下，两个实体无法达成“同时做”的共识**
   - Alice：早上 8 点？
   - Bob：好！（这是 Bob 不知道 Alice 是否收到自己的回应，不敢发起行动）
   - Alice：收到！（这是 Alice 也不知道 Bob 是否收到自己的收到，也不敢发起行动）
@@ -3307,32 +3323,32 @@ Two General's Paradox：
   - 两人永远无法确定对方是否收到自己的消息，导致都不敢发起行动
 - 无法保证双方**同时做**
 
-Two-Phase Commit
-- 不试图保证双方同时做，只保证双方最终会去做
+**Two-Phase Commit**
+- **不试图保证双方同时做，只保证双方最终会去做**
 - 分布式事务：两台或多台机器可以原子性地同意或不同意做某件事
 
 Two-Phase Commit Algorithm：
 - 每台机器维护一个持久、稳定的日志，记录承诺是否发生
   - 机器崩溃重启后，首先检查日志，恢复到崩溃前状态
 - 理念：先确保所有人承诺将会提交，然后再要求所有人提交
-- 准备阶段（prepare phase）
+- **准备阶段**（prepare phase）
   - 全局协调者（global coordinator）向所有参与事务的结点（participants）发送 VOTE-REQ
-    - 参与结点在等待 VOTE-REQ 过程中可能超时而 abort（发送 VOTE-ABORT）
+    - **参与结点在等待 VOTE-REQ 过程中可能超时而 abort（发送 VOTE-ABORT）**
   - 每个参与结点收到请求后，检查自己是否能够成功完成事务。将承诺写入自己的日志，并向协调者响应 VOTE-COMMIT（同意提交）或 VOTE-ABORT（拒绝提交）
   - 如果任一参与结点否决（abort），或响应超时，协调者将 "Abort" 写入自己的日志，并向所有参与者发送 GLOBAL-ABORT。参与者们也将 "Abort" 写入自己的日志
   - 如果所有参与者都响应同意，协调者将 "Commit" 写入自己的日志，进入提交阶段
     - 一旦进行到此步，事务就必须被最终完成
     - 也就是说 worker 的 failure 只在准备阶段有影响
-- 提交阶段（commit phase）
+- **提交阶段**（commit phase）
   - 协调者向所有参与结点发送 GLOBAL-COMMIT
-    - 等待 GLOBAL-COMMIT 的参与结点不会因超时而中止，必须一直等
+    - **等待 GLOBAL-COMMIT 的参与结点不会因超时而中止，必须一直等**
   - 参与者执行实际的提交操作，在自己的日志中记录，并响应协调者
   - 协调者收到所有参与结点的响应后，将 "Got Commit" 写入自己的日志
 - 日志用于保证所有机器要么全部提交，要么全部回滚
 
 分布式 decision making：
 - 为什么需要分布式决策？
-  - Fault tolerance：部分故障不影响系统运行
+  - Fault tolerance：**部分故障不影响系统运行**
   - 决策模式之后，结果多处存储
 - 为什么 2PC 不被 Two General's Paradox 影响
   - 2PC 只需要保证所有结点**最终**达到同一决策，不要求**同时性**
@@ -3343,6 +3359,7 @@ Two-Phase Commit Algorithm：
   - 站点 B 重启后检查日志，发现日志中已经记录了“准备好提交”，向站点 A 发送信息询问当前状态
     - 此时 B 不能决定中止，因为更新可能已经被提交
   - B 被阻塞，直到 A 重启并响应
+  - **等待 GLOBAL-COMMIT 的参与结点不会因超时而中止，必须一直等**
 
 ### Storage and File Systems in Modern Computer Systems
 
@@ -3359,7 +3376,7 @@ Two-Phase Commit Algorithm：
 
 #### Dedup
 
-Deduplication：在全局文件系统中消除重复数据（全局压缩技术）
+Deduplication：**在全局文件系统中消除重复数据（全局压缩技术）**
 - `lab3-designdoc-v1.md` 和 `lab3-designdoc-v2.md` 中的重复部分只存一份
 - 可以达到远超传统的小窗口压缩的压缩率
 - 例子：数据备份
@@ -3367,8 +3384,8 @@ Deduplication：在全局文件系统中消除重复数据（全局压缩技术�
   - 很多冗余数据块：冗余数据块只存指针
 
 dedup 过程：
-- 数据流分割为数据块，每个数据块有一个唯一的指纹，作为索引
-- 每次存储时在文件系统中查找指纹是否存在，若存在，只存指纹，否则存储数据块
+- **数据流分割为数据块，每个数据块有一个唯一的指纹，作为索引**
+- **每次存储时在文件系统中查找指纹是否存在，若存在，只存指纹，否则存储数据块**
 
 高速、高压缩率、低硬件成本：
 - **Summary vector**
@@ -3382,7 +3399,7 @@ dedup 过程：
   - 利用 duplicate locality，将来自同一个流的数据块以及元数据（索引数据）放在同一个 container 中
 - Locality preserved caching (LPC)
   - 在缓存中维持 duplicate locality
-  - 磁盘索引保存 $\langle$指纹, container ID$\rangle$$ 对，它们被缓存在 index cache 中
+  - 磁盘索引保存 $\langle\text{指纹, container ID}\rangle$ 对，它们被缓存在 index cache 中
   - 缓存替换时，在 disk index 里找到对应的 container，将 container 的所有元数据加载进 index cache
   - 也就是说，以 container 为单位进行缓存替换
 - 全过程
@@ -3399,19 +3416,19 @@ dedup 过程：
 - 共享的资源
 
 动机：可预测的应用行为和性能
-- 端到端 SLA：
+- **端到端 SLA**：
   - 可保证存储带宽
   - 可保证高 IOPS 和优先级
   - 关于 I/O 路径的分应用决策控制
-- 当前系统 I/O 路径有太多层，难以配置
+- **当前系统 I/O 路径有太多层，难以配置**
   - 没有 storage control plane
 
 IOFlow：
-- 解耦数据平面（enforcement）和控制平面（policy logic）
+- **解耦数据平面（enforcement）和控制平面（policy logic）**
 - 贡献
-  - 定义并构建了存储控制平面：中心化的控制器
-  - 控制平面和数据平面之间的 API（IOFlow API）
-  - 控制器通过 IOFlow API 控制数据平面中的可控制队列，从而满足性能 SLA 和非性能 SLA（如 bypassing malware scanner）
+  - 定义并构建了存储控制平面：**中心化的控制器**
+  - **控制平面和数据平面之间的 API（IOFlow API）**
+  - **控制器通过 IOFlow API 控制数据平面中的可控制队列，从而满足性能 SLA 和非性能 SLA（如 bypassing malware scanner）**
 - Storage traffic 中没有通用的 I/O 头：控制器 flow name resolution 
 - 拥塞控制中的 rate limiting：
   - token bucket 不 work：读请求比写请求小很多，后者包含要写的数据。带宽都被读请求占了
@@ -3451,7 +3468,7 @@ IOFlow：
   - 客户与 master 交互，获取文件的元数据
   - 客户的文件操作直接与 chunkservers 交互
   - 根据网络拓扑调度昂贵数据流，以优化性能
-- Master node
+- **Master node**
   - 负责系统级操作：管理 chunk leases、回收存储空间、负载均衡
   - 维护文件系统元数据：全部在内存中，命名空间和 file-to-chunk mapping 持久地存储在 **operation log** 中
     - 文件名到 chunk 的映射
@@ -3472,15 +3489,15 @@ IOFlow：
   - Shadow masters 可以提供文件系统的只读访问，这样在主 master 挂掉时，仍然可以访问文件系统
 
 Chunks 和 Chunkservers：
-- 文件被分割为固定大小 chunk，每个 chunk 有一个不可变、全局唯一的 64 位 chunk handle
+- **文件被分割为固定大小 chunk**，每个 chunk 有一个不可变、全局唯一的 64 位 chunk handle
 - Chunkservers 将 chunk 以 Linux 文件形式存储在本地磁盘
   - 元数据存储在 master 中，包括当前备份位置、引用计数（copy-on-write）、版本号
-- Chunk size：64 MB（比大多数文件系统大很多）
-  - 缺点：内部碎片化严重、并发的小文件操作占用较多流量
+- **Chunk size：64 MB（比大多数文件系统大很多）**
+  - 缺点：**内部碎片化严重、并发的小文件操作占用较多流量**
   - 优点：
-    - 减少与 master 的交互开销
-    - 维持一个持久的 TCP 连接，减少网络开销
-    - 减少元数据大小，可以完全存储在内存中
+    - **减少与 master 的交互开销**
+    - **维持一个持久的 TCP 连接，减少网络开销**
+    - **减少元数据大小，可以完全存储在内存中**
 
 当 master 节点收到对某个 chunk 的修改操作时：
 - Master 寻找持有该 chunk 的所有 chunkserver，并授权其中一个“租约”(lease)
@@ -3503,7 +3520,7 @@ Chunks 和 Chunkservers：
   - 客户端可以重试第 (3) 步到第 (7) 步。
 - 注意：如果一次写入操作跨越了 chunk 的边界，GFS 会将其拆分成多个独立的写入操作。
 
-#### DC-Cache
+#### EC-Cache
 
 数据密集型集群依靠分布式、in-memory 缓存来提高性能
 
@@ -3514,7 +3531,7 @@ Chunks 和 Chunkservers：
 
 流行方法：selective replication
 - 将热数据备份到更多的节点上
-- Erasure coding 可以在不增加内存开销的前提下，提到读的性能，使负载更均衡
+- Erasure coding 可以在**不增加内存开销的前提下，提高读的性能，使负载更均衡**
 
 回顾：erasure coding
 - 将数据分为 $k$ 个数据块，生成 $r$ 个校验块
@@ -3523,10 +3540,10 @@ Chunks 和 Chunkservers：
 EC-Cache 鸟瞰：
 - 写
   - 数据分为 $k$ 个数据单元，encode 生成 $r$ 个校验单元
-  - 将 $k + r$ 个单元缓存到不同服务器上（均匀随机分布）
+  - **将 $k + r$ 个单元缓存到不同服务器上（均匀随机分布）**
 - 读
-  - 均匀随机地读 $k+\delta$ 个单元（additional reads）
-  - 使用前 $k$ 个到达的单元 decode 并合并出数据
+  - **均匀随机地读 $k+\delta$ 个单元（additional reads）**
+  - **使用前 $k$ 个到达的单元 decode 并合并出数据**
 - 优点：
   - 对内存的细粒度控制：Selective replication 以整份数据为单位，EC-Cache 允许更细粒度
   - 数据被分割，优化负载均衡
@@ -3536,7 +3553,7 @@ EC-Cache 鸟瞰：
 和存储系统中的 erasure coding 在设计考量上的区别：
 - 目的：
   - 存储系统：空间高效的 fault tolerance
-  - EC-Cache：降低读延迟、负载均衡
+  - EC-Cache：**降低读延迟、负载均衡**
 - Erasure code 选择：
   - 存储系统：高效的存储和重建，不一定满足“any $k$ out of $k+r$”性质
   - EC-Cache：内存 cache 中不需要重建，要求“any $k$ out of $k+r$”性质
@@ -3546,10 +3563,10 @@ EC-Cache 鸟瞰：
 
 #### Chord
 
-问题：在分布式文件共享系统中，如何定位数据
+问题：**在分布式文件共享系统中，如何定位数据**
 - 中心化：单点故障、需要存大量索引信息
 - Naive 分布式：Flooding（我问你，你问他），开销大、延迟高
-- Chord：routed messages
+- Chord：**routed messages**
 
 路由的挑战：
 - 定义 key nearness metric
@@ -3577,9 +3594,9 @@ Chord：
   - 如果所有结点都保存全局信息，则查找只需 $O(1)$ 时间，但路由表空间开销为 $O(N)$
   - 如果所有结点只保存下一个结点信息，则查找需要 $O(N)$ 时间，但路由表空间开销为 $O(1)$
   - Finger tables：
-    - 结点 $n$ 保存结点 $n + 2^i$ 的信息，其中 $i = 0, 1, ..., m-1$，$m$ 是 ID 的位数
+    - **结点 $n$ 保存结点 $n + 2^i$ 的信息**，其中 $i = 0, 1, ..., m-1$，$m$ 是 ID 的位数
       - 它们称为结点的 fingers
-    - 时间开销和空间开销均为 $O(\log N)$
+    - **时间开销和空间开销均为 $O(\log N)$**
 - Joining the Ring
   - 初始化新结点的 finger table
     - 若新结点 ID 为 $36$，则它的 finger table 包含结点 $37, 38, 40, ...$
