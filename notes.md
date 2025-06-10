@@ -42,9 +42,9 @@
       - [FaRM: Fast Remote Memory](#farm-fast-remote-memory)
       - [vLLM](#vllm)
       - [InfiniSwap](#infiniswap)
-      - [AIFM](#aifm)
+      - [AIFM: Application-Integrated Far Memory](#aifm-application-integrated-far-memory)
       - [PipeSwitch](#pipeswitch)
-      - [TGS](#tgs)
+      - [TGS: Transparent GPU Sharing in Container Clouds for Deep Learning Workloads](#tgs-transparent-gpu-sharing-in-container-clouds-for-deep-learning-workloads)
   - [I/O](#io)
     - [Hard Disk Devices (HDDs)](#hard-disk-devices-hdds)
     - [Solid State Drives (SSDs)](#solid-state-drives-ssds)
@@ -2399,7 +2399,7 @@ PagedAttention:
 特点：
 - 支持一对多（一个机器请求多个机器的空闲内存）和多对多
 
-#### AIFM
+#### AIFM: Application-Integrated Far Memory
 
 Memory 是非弹性的，被物理内存容量所限制
 
@@ -2464,7 +2464,7 @@ Active-standby worker switching：
 - **将每个任务的初始化切成两段，第一段不需要显存，可以在一开始就完成**
 - **初始化的第二段在可以在调度后立即开始，和先前任务的清理并行，因为它只标记而不实际使用显存**
 
-#### TGS
+#### TGS: Transparent GPU Sharing in Container Clouds for Deep Learning Workloads
 
 核心思想：**分享 GPU 核心以增强 GPU 利用率**
 
@@ -2725,7 +2725,7 @@ Queuing theory：
 - 用户发射请求的速率：$\lambda = 10 \times 8\text{KB/s}$
 - 请求和服务时间服从指数分布（$C=1$）
 - 平均服务时间 $T_{ser} = 20\text{ms}$
-- 磁盘利用率为 $u = \frac{T_{ser}}{T_{arr}} = 20\text{ms} \times 10 \text{/s}= 20%$
+- 磁盘利用率为 $u = \frac{T_{ser}}{T_{arr}} = 20\text{ms} \times 10 \text{/s}= 20\%$
 - 平均 queuing delay $T_{q} = T_{ser} \cdot \frac{u}{1 - u} = 20\text{ms} \cdot \frac{0.2}{0.8} = 5\text{ms}$
 - 队列长度 $L_{q} = \lambda \cdot T_{q} = 10 \text{/s} \cdot 5\text{ms} = 0.05$ 个请求
 - 总延迟 $T = T_{ser} + T_{q} = 20\text{ms} + 5\text{ms} = 25\text{ms}$
@@ -3160,7 +3160,7 @@ Reliability 问题
 Careful Ordering
 - **以特定顺序执行文件系统操作，使得操作序列可以被安全地打断**
   - 分配数据块 => 令 inode 指向数据块 => 更新 free space map => 更新目录
-  - **先写数据，再更新目录项**，否则无法发现是否被打断
+  - **遵循“内容先于指针”原则**。Inode 是指向数据块的“指针”，所以数据块必须先准备好。
 - 崩溃后恢复：
   - 读取数据结构以检查是否有未完成的操作
   - 清理/完成
